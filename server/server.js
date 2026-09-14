@@ -287,6 +287,47 @@ const server = http.createServer(async (req, res) => {
     return handleIngest(req, res);
   }
 
+  if (req.method === "GET" && (pathname === "/" || pathname === "/dashboard" || pathname === "/index.html")) {
+    const indexPath = path.join(__dirname, "public", "index.html");
+    if (fs.existsSync(indexPath)) {
+      const html = fs.readFileSync(indexPath, "utf8");
+      res.writeHead(200, {
+        "Content-Type": "text/html; charset=utf-8",
+        "Content-Length": Buffer.byteLength(html)
+      });
+      return res.end(html);
+    }
+  }
+
+  if (req.method === "GET" && pathname === "/v1/stats") {
+    const kills = db.prepare("SELECT COUNT(*) as count FROM kill_events").get()?.count || 0;
+    const drops = db.prepare("SELECT COUNT(*) as count FROM event_drops").get()?.count || 0;
+    const vendors = db.prepare("SELECT COUNT(*) as count FROM vendor_events").get()?.count || 0;
+    const installs = db.prepare("SELECT COUNT(DISTINCT install_id) as count FROM kill_events").get()?.count || 0;
+    return jsonResponse(res, {
+      total_kills: kills,
+      total_drops: drops,
+      total_vendor_records: vendors,
+      distinct_installs: installs,
+      timestamp: new Date().toISOString()
+    });
+  }
+
+  if (req.method === "GET" && pathname === "/v1/recent") {
+    const limit = Math.min(100, parseInt(parsedUrl.searchParams.get("limit") || "25", 10));
+    const recentKills = db.prepare(
+      "SELECT event_id, install_id, observed_at, map_id, hard_mode, mob_model_id, mob_name, confidence FROM kill_events ORDER BY observed_at DESC, event_id DESC LIMIT ?"
+    ).all(limit);
+
+    const getDrops = db.prepare("SELECT item_model_id, item_name, item_type, rarity FROM event_drops WHERE event_id = ?");
+    for (const k of recentKills) {
+      k.hard_mode = Boolean(k.hard_mode);
+      k.drops = getDrops.all(k.event_id);
+    }
+
+    return jsonResponse(res, { recent_kills: recentKills });
+  }
+
   if (req.method === "GET" && pathname === "/v1/rates") {
     const windowParam = parseInt(parsedUrl.searchParams.get("window") || "1000", 10);
     const minParam = parseInt(parsedUrl.searchParams.get("min_samples") || "10", 10);

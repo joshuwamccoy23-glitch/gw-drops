@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GW-Drops — Live Telemetry & Ingestion Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --card-bg: rgba(18, 24, 38, 0.85);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --card-hover: rgba(255, 255, 255, 0.12);
+      --text: #f3f4f6;
+      --text-muted: #9ca3af;
+      --accent: #3b82f6;
+      --accent-glow: rgba(59, 130, 246, 0.25);
+      --green: #10b981;
+      --green-glow: rgba(16, 185, 129, 0.2);
+      --amber: #f59e0b;
+      --purple: #8b5cf6;
+      --red: #ef4444;
+      --gold: #fbbf24;
+      --rare: #60a5fa;
+      --unique: #34d399;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg);
+      background-image: 
+        radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.08) 0px, transparent 50%),
+        radial-gradient(at 100% 0%, rgba(139, 92, 246, 0.08) 0px, transparent 50%),
+        radial-gradient(at 50% 100%, rgba(16, 185, 129, 0.05) 0px, transparent 50%);
+      background-attachment: fixed;
+      color: var(--text);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      line-height: 1.5;
+      padding: 24px;
+      min-height: 100vh;
+    }
+
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 28px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--card-border);
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .logo-badge {
+      background: linear-gradient(135deg, #2563eb, #7c3aed);
+      color: #fff;
+      font-weight: 700;
+      font-size: 1.25rem;
+      padding: 8px 14px;
+      border-radius: 12px;
+      box-shadow: 0 4px 14px var(--accent-glow);
+    }
+
+    .brand-text h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    .brand-text p {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .status-pill {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(16, 185, 129, 0.1);
+      border: 1px solid rgba(16, 185, 129, 0.25);
+      color: var(--green);
+      padding: 6px 14px;
+      border-radius: 9999px;
+      font-size: 0.8rem;
+      font-weight: 600;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      background: var(--green);
+      border-radius: 50%;
+      box-shadow: 0 0 10px var(--green);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    .btn {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--card-border);
+      color: var(--text);
+      padding: 8px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 0.85rem;
+      font-weight: 500;
+      transition: all 0.2s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .btn:hover {
+      background: rgba(255, 255, 255, 0.12);
+      border-color: var(--card-hover);
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #2563eb, #1d4ed8);
+      border-color: #3b82f6;
+      box-shadow: 0 2px 10px var(--accent-glow);
+    }
+
+    .btn-primary:hover {
+      background: linear-gradient(135deg, #3b82f6, #2563eb);
+    }
+
+    /* Stat Cards */
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+
+    .metric-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 14px;
+      padding: 18px 20px;
+      backdrop-filter: blur(12px);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+    }
+
+    .metric-label {
+      font-size: 0.8rem;
+      font-weight: 500;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 6px;
+    }
+
+    .metric-value {
+      font-size: 1.85rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    .metric-subtext {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    /* Tunnel Banner */
+    .tunnel-banner {
+      background: rgba(59, 130, 246, 0.08);
+      border: 1px solid rgba(59, 130, 246, 0.25);
+      border-radius: 12px;
+      padding: 14px 18px;
+      margin-bottom: 28px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .tunnel-info {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .tunnel-icon {
+      background: rgba(59, 130, 246, 0.2);
+      color: #60a5fa;
+      padding: 8px 10px;
+      border-radius: 8px;
+      font-weight: bold;
+    }
+
+    .tunnel-url {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.85rem;
+      color: #93c5fd;
+      background: rgba(0,0,0,0.25);
+      padding: 4px 10px;
+      border-radius: 6px;
+      user-select: all;
+    }
+
+    /* Tabs */
+    .tabs-nav {
+      display: flex;
+      gap: 8px;
+      border-bottom: 1px solid var(--card-border);
+      margin-bottom: 20px;
+    }
+
+    .tab-btn {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-family: inherit;
+      font-size: 0.95rem;
+      font-weight: 600;
+      padding: 10px 18px;
+      cursor: pointer;
+      position: relative;
+      transition: color 0.2s;
+    }
+
+    .tab-btn:hover {
+      color: var(--text);
+    }
+
+    .tab-btn.active {
+      color: #60a5fa;
+    }
+
+    .tab-btn.active::after {
+      content: '';
+      position: absolute;
+      bottom: -1px;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: #3b82f6;
+      box-shadow: 0 0 8px #3b82f6;
+    }
+
+    .tab-content {
+      display: none;
+    }
+
+    .tab-content.active {
+      display: block;
+    }
+
+    /* Tables */
+    .table-container {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 14px;
+      overflow: hidden;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+      backdrop-filter: blur(12px);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 0.88rem;
+    }
+
+    th {
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--text-muted);
+      padding: 12px 18px;
+      font-weight: 600;
+      text-transform: uppercase;
+      font-size: 0.75rem;
+      letter-spacing: 0.05em;
+      border-bottom: 1px solid var(--card-border);
+    }
+
+    td {
+      padding: 14px 18px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      color: #e5e7eb;
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    tr:hover td {
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+
+    .badge-hm {
+      background: rgba(239, 68, 68, 0.15);
+      color: #f87171;
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+
+    .badge-nm {
+      background: rgba(59, 130, 246, 0.15);
+      color: #60a5fa;
+      border: 1px solid rgba(59, 130, 246, 0.3);
+    }
+
+    .badge-high {
+      background: rgba(16, 185, 129, 0.15);
+      color: #34d399;
+    }
+
+    .badge-med {
+      background: rgba(245, 158, 11, 0.15);
+      color: #fbbf24;
+    }
+
+    .badge-low {
+      background: rgba(107, 114, 128, 0.2);
+      color: #9ca3af;
+    }
+
+    .price-value {
+      font-family: 'JetBrains Mono', monospace;
+      color: #fbbf24;
+      font-weight: 600;
+    }
+
+    .mono {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+    }
+
+    .empty-state {
+      padding: 48px;
+      text-align: center;
+      color: var(--text-muted);
+    }
+
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: #1e293b;
+      border: 1px solid #3b82f6;
+      color: #fff;
+      padding: 12px 20px;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+      display: none;
+      z-index: 1000;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="brand">
+        <div class="logo-badge">GW</div>
+        <div class="brand-text">
+          <h1>Drop & Vendor Ingestion Live Monitor</h1>
+          <p>Real-time crowdsourced kill telemetry, drop percentages, and vendor prices</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <div class="status-pill">
+          <div class="status-dot"></div>
+          Server Live
+        </div>
+        <button id="refreshBtn" class="btn" onclick="fetchData()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+          Refresh
+        </button>
+        <button id="publishBtn" class="btn btn-primary" onclick="publishNow()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+          Commit & Push GitHub
+        </button>
+      </div>
+    </header>
+
+    <!-- Tunnel Details -->
+    <div class="tunnel-banner">
+      <div class="tunnel-info">
+        <div class="tunnel-icon">SSL</div>
+        <div>
+          <div style="font-size:0.75rem; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Cloudflare Public Endpoint (Active)</div>
+          <span id="tunnelUrl" class="tunnel-url">https://escape-championship-screening-international.trycloudflare.com/v1/telemetry</span>
+        </div>
+      </div>
+      <div style="font-size:0.8rem; color:var(--text-muted);">
+        Local port: <strong style="color:#fff;">8787</strong> | Auto-Publish Interval: <strong style="color:#fff;">60 min</strong>
+      </div>
+    </div>
+
+    <!-- Metrics Overview -->
+    <div class="metrics-grid">
+      <div class="metric-card">
+        <div class="metric-label">Kill Events Logged</div>
+        <div id="statKills" class="metric-value">0</div>
+        <div class="metric-subtext">Aggregated confirmed observations</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Confirmed Item Drops</div>
+        <div id="statDrops" class="metric-value">0</div>
+        <div class="metric-subtext">Player-assigned ground drops</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Vendor Price Samples</div>
+        <div id="statVendor" class="metric-value">0</div>
+        <div class="metric-subtext">Quotes and completed transactions</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Contributing Clients</div>
+        <div id="statInstalls" class="metric-value">0</div>
+        <div class="metric-subtext">Distinct anonymous installations</div>
+      </div>
+    </div>
+
+    <!-- Tabs Nav -->
+    <div class="tabs-nav">
+      <button class="tab-btn active" onclick="switchTab('feed', this)">Live Ingestion Feed</button>
+      <button class="tab-btn" onclick="switchTab('rates', this)">Calculated Drop Rates (Wilson CI)</button>
+      <button class="tab-btn" onclick="switchTab('prices', this)">Vendor & Trader Prices</button>
+    </div>
+
+    <!-- Tab 1: Live Feed -->
+    <div id="tab-feed" class="tab-content active">
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Map ID</th>
+              <th>Mode</th>
+              <th>Mob Killed</th>
+              <th>Drops Assigned</th>
+              <th>Confidence</th>
+              <th>Client ID</th>
+            </tr>
+          </thead>
+          <tbody id="feedTableBody">
+            <tr><td colspan="7" class="empty-state">Loading latest kill events...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Tab 2: Calculated Drop Rates -->
+    <div id="tab-rates" class="tab-content">
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Item Name</th>
+              <th>Mob Source</th>
+              <th>Map / Mode</th>
+              <th>Eligible Kills</th>
+              <th>Drops Seen</th>
+              <th>Observed Rate</th>
+              <th>95% Wilson CI</th>
+              <th>Confidence</th>
+            </tr>
+          </thead>
+          <tbody id="ratesTableBody">
+            <tr><td colspan="8" class="empty-state">Loading calculated drop rates...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Tab 3: Vendor Prices -->
+    <div id="tab-prices" class="tab-content">
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Item</th>
+              <th>Vendor Type</th>
+              <th>Type</th>
+              <th>Samples</th>
+              <th>Avg Price</th>
+              <th>Min / Max</th>
+              <th>Last Seen</th>
+            </tr>
+          </thead>
+          <tbody id="pricesTableBody">
+            <tr><td colspan="7" class="empty-state">Loading vendor prices...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script>
+    function showToast(msg) {
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.style.display = 'block';
+      setTimeout(() => { t.style.display = 'none'; }, 3000);
+    }
+
+    function switchTab(tabId, el) {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      if (el) el.classList.add('active');
+      document.getElementById('tab-' + tabId).classList.add('active');
+    }
+
+    function formatDate(ts) {
+      if (!ts) return '—';
+      const d = new Date(ts * 1000);
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    }
+
+    async function fetchData() {
+      try {
+        const [statsRes, ratesRes, pricesRes, feedRes] = await Promise.all([
+          fetch('/v1/stats').then(r => r.json()),
+          fetch('/v1/rates?min_samples=1').then(r => r.json()),
+          fetch('/v1/prices').then(r => r.json()),
+          fetch('/v1/recent').then(r => r.json())
+        ]);
+
+        document.getElementById('statKills').textContent = (statsRes.total_kills || 0).toLocaleString();
+        document.getElementById('statDrops').textContent = (statsRes.total_drops || 0).toLocaleString();
+        document.getElementById('statVendor').textContent = (statsRes.total_vendor_records || 0).toLocaleString();
+        document.getElementById('statInstalls').textContent = (statsRes.distinct_installs || 0).toLocaleString();
+
+        // Feed
+        const feedBody = document.getElementById('feedTableBody');
+        if (!feedRes.recent_kills || feedRes.recent_kills.length === 0) {
+          feedBody.innerHTML = '<tr><td colspan="7" class="empty-state">No kill observations received yet. In-game kills will appear here live once batched.</td></tr>';
+        } else {
+          feedBody.innerHTML = feedRes.recent_kills.map(k => {
+            const dropBadges = (k.drops && k.drops.length > 0)
+              ? k.drops.map(d => `<span style="color:#60a5fa; font-weight:600;">${d.item_name}</span>`).join(', ')
+              : '<span style="color:var(--text-muted);">None</span>';
+            return `
+              <tr>
+                <td class="mono">${formatDate(k.observed_at)}</td>
+                <td>Map ${k.map_id}</td>
+                <td><span class="badge ${k.hard_mode ? 'badge-hm' : 'badge-nm'}">${k.hard_mode ? 'HM' : 'NM'}</span></td>
+                <td><strong>${k.mob_name}</strong> <span class="mono" style="color:var(--text-muted); font-size:0.75rem;">(#${k.mob_model_id})</span></td>
+                <td>${dropBadges}</td>
+                <td><span class="badge ${k.confidence === 'confirmed' ? 'badge-high' : 'badge-med'}">${k.confidence}</span></td>
+                <td class="mono" style="color:var(--text-muted); font-size:0.75rem;">${k.install_id.substring(0, 8)}...</td>
+              </tr>
+            `;
+          }).join('');
+        }
+
+        // Rates
+        const ratesBody = document.getElementById('ratesTableBody');
+        if (!ratesRes.records || ratesRes.records.length === 0) {
+          ratesBody.innerHTML = '<tr><td colspan="8" class="empty-state">No calculated drop rates yet. Published when eligible kill samples accumulate.</td></tr>';
+        } else {
+          ratesBody.innerHTML = ratesRes.records.map(r => `
+            <tr>
+              <td><strong style="color:#60a5fa;">${r.item_name}</strong></td>
+              <td>${r.mob_name}</td>
+              <td>Map ${r.map_id} <span class="badge ${r.hard_mode ? 'badge-hm' : 'badge-nm'}">${r.hard_mode ? 'HM' : 'NM'}</span></td>
+              <td>${r.eligible_kills.toLocaleString()}</td>
+              <td>${r.confirmed_drops.toLocaleString()}</td>
+              <td><strong style="color:#10b981;">${r.rate_pct.toFixed(3)}%</strong></td>
+              <td class="mono" style="color:var(--text-muted);">${r.confidence_low_pct.toFixed(3)}% – ${r.confidence_high_pct.toFixed(3)}%</td>
+              <td><span class="badge badge-high">${r.confidence}</span></td>
+            </tr>
+          `).join('');
+        }
+
+        // Prices
+        const pricesBody = document.getElementById('pricesTableBody');
+        if (!pricesRes.prices || pricesRes.prices.length === 0) {
+          pricesBody.innerHTML = '<tr><td colspan="7" class="empty-state">No vendor transactions recorded yet. Trader quotes & merchant sales will appear here.</td></tr>';
+        } else {
+          pricesBody.innerHTML = pricesRes.prices.map(p => `
+            <tr>
+              <td><strong>${p.item_name}</strong></td>
+              <td><span style="color:#c084fc;">${p.vendor_type}</span></td>
+              <td><span class="badge badge-nm">${p.transaction_type}</span></td>
+              <td>${p.sample_count}</td>
+              <td class="price-value">${p.avg_price} g</td>
+              <td class="mono">${p.min_price} g / ${p.max_price} g</td>
+              <td class="mono">${formatDate(p.last_observed_at)}</td>
+            </tr>
+          `).join('');
+        }
+      } catch (err) {
+        console.error('Fetch error:', err);
+      }
+    }
+
+    async function publishNow() {
+      const btn = document.getElementById('publishBtn');
+      btn.disabled = true;
+      btn.innerHTML = 'Publishing...';
+      try {
+        const res = await fetch('/v1/publish', { method: 'POST' });
+        const data = await res.json();
+        showToast(data.success ? 'Published & pushed to GitHub!' : ('Publish: ' + (data.message || 'Done')));
+        fetchData();
+      } catch (e) {
+        showToast('Error publishing: ' + e.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> Commit & Push GitHub`;
+      }
+    }
+
+    fetchData();
+    setInterval(fetchData, 4000); // Live poll every 4 seconds
+  </script>
+</body>
+</html>
