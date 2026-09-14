@@ -46,7 +46,6 @@ public:
     void DrawSettings() override;
     void Draw(IDirect3DDevice9* device) override;
     void Update(float delta) override;
-    bool WndProc(UINT message, WPARAM wparam, LPARAM lparam) override;
 
     void SelectZoneByMapId(uint32_t map_id);
     void SelectZoneByName(const std::string& zone_name);
@@ -229,6 +228,7 @@ private:
     void UpdateAuctionRequest(float delta);
     std::string GetServiceBaseUrl() const;
     void PrefillAuctionItem(const GW::Item* item);
+    static bool __cdecl DrawInventoryContextMenuEntry(uint32_t item_id, float width);
     void TriggerBatchUpload();
     void DrawItemTooltip(const std::string& name,
                          const std::string& category,
@@ -249,11 +249,16 @@ private:
     using SetTravelDestinationMapId_pt = bool (__cdecl*)(uint32_t);
     using SetCustomTravelPointGame_pt = bool (__cdecl*)(float, float);
     using ClearCustomTravelPoint_pt = void (__cdecl*)();
+    using InventoryContextMenuCallback_pt = bool(__cdecl*)(uint32_t, float);
+    using InventoryAddContextMenuCallback_pt = void(__cdecl*)(InventoryContextMenuCallback_pt);
+    using InventoryRemoveContextMenuCallback_pt = void(__cdecl*)(InventoryContextMenuCallback_pt);
 
     GetItemImageByName_pt get_item_image_fn_ = nullptr;
     SetTravelDestinationMapId_pt set_travel_dest_fn_ = nullptr;
     SetCustomTravelPointGame_pt set_custom_point_fn_ = nullptr;
     ClearCustomTravelPoint_pt clear_custom_point_fn_ = nullptr;
+    InventoryAddContextMenuCallback_pt inventory_add_context_menu_fn_ = nullptr;
+    InventoryRemoveContextMenuCallback_pt inventory_remove_context_menu_fn_ = nullptr;
 
     std::unordered_map<uint32_t, std::unique_ptr<PluginUtils::EncString>> agent_names_cache_;
     std::string tracked_mob_name_;
@@ -313,25 +318,23 @@ private:
     char auction_item_buf_[160] = "";
     char auction_notes_buf_[241] = "";
     char auction_modifiers_buf_[1001] = "";
-    char auction_inscription_buf_[161] = "";
     char auction_weapon_prefix_buf_[161] = "";
     char auction_weapon_suffix_buf_[161] = "";
-    char auction_rune_buf_[161] = "";
-    char auction_insignia_buf_[161] = "";
     char auction_other_currency_buf_[161] = "";
     int auction_type_idx_ = 0;
     int auction_equipment_type_idx_ = 0;
     int auction_currency_idx_ = 0;
+    int auction_inscription_idx_ = 0;
+    int auction_rune_idx_ = 0;
+    int auction_insignia_idx_ = 0;
     int auction_quantity_ = 1;
     int auction_unit_price_ = 0;
     int auction_duration_hours_ = 24;
     bool auction_publish_name_confirmed_ = false;
     bool auction_focus_requested_ = false;
-    bool auction_context_prompt_ = false;
     bool auction_show_matches_ = false;
     bool auction_item_from_inventory_ = false;
     uint32_t auction_item_model_id_ = 0;
-    uint32_t auction_context_item_id_ = 0;
     std::unique_ptr<PluginUtils::EncString> auction_item_name_decoder_;
     std::unique_ptr<PluginUtils::EncString> auction_item_details_decoder_;
 

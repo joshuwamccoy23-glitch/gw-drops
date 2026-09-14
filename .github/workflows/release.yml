@@ -13,10 +13,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Publish DLL
+      - name: Publish DLLs
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" release/DropExplorer.dll \
+          gh release create "$GITHUB_REF_NAME" release/DropExplorer.dll release/GWToolboxdll.dll \
             --title "DropExplorer $GITHUB_REF_NAME" \
-            --notes "Player Auction House, inventory listing flow, equipment modifier details, repaired navigation and live mob tracking, self-contained telemetry, and collector hardening."
+            --notes "Adds Auction House actions directly to the GWToolbox++ inventory right-click menu and canonical inscription, rune, and insignia dropdowns. Install both DLLs and fully restart Guild Wars. Also includes multi-currency listings, repaired navigation and live mob tracking, self-contained telemetry, and collector hardening."

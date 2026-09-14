@@ -9,7 +9,8 @@ Crowdsourced drop observations, vendor pricing, map guidance, and player-to-play
    - **Smart 5–10 Minute Batching**: In-game observations (mob kills, confirmed drops, vendor price quotes, and completed buy/sell transactions) are held in memory. Every 5–10 minutes (user-configurable), if data was collected, a single batch POST is dispatched to your server. If nothing was collected, **zero** network requests are made.
    - **Periodic GitHub Sync**: Downloads sanitized crowdsourced datasets (`community-rates.json` and `vendor-prices.json`) directly from this repository's raw GitHub URLs to show live drop rates (with sample size and 95% Wilson confidence intervals) and vendor price averages in tooltips.
    - **Auction House**: Publishes sell listings and buy orders to the collector. Trades are never executed by the plugin; the Contact button starts an in-game whisper to the listing player.
-   - **Inventory Listing Flow**: Right-click an inventory item to prefill its name, model, quantity, and decoded weapon or armor modifier text. Confirm the listing and price in the Auction House tab.
+   - **Inventory Listing Flow**: Right-click an inventory item in the existing GWToolbox++ item menu to create a sell listing or buy order. The plugin prefills its name, model, quantity, and decoded weapon or armor modifier text, then opens the Auction House tab.
+   - **Canonical Equipment Modifiers**: Inscriptions, insignias, and armor runes use fixed dropdowns with a `None` choice. Readable modifiers on inventory items are selected automatically.
    - **Item Search**: Search the built-in DropExplorer catalog or enter any Guild Wars item name manually. Buy orders can include required inscriptions, runes, insignias, and other modifiers.
 
 2. **Collector Server (`server/server.js`)**:
@@ -33,7 +34,9 @@ Crowdsourced drop observations, vendor pricing, map guidance, and player-to-play
 ## Repository Layout
 
 - `plugin/`: Source code for `DropExplorer` (`DropExplorerPlugin.h`, `DropExplorerPlugin.cpp`, `DropExplorerData.h`, `DropExplorerData.cpp`).
-- `release/DropExplorer.dll`: Pre-compiled release DLL ready for GWToolbox++.
+- `release/DropExplorer.dll`: Pre-compiled DropExplorer plugin DLL.
+- `release/GWToolboxdll.dll`: Matching GWToolbox++ core with the native inventory context-menu callback exports.
+- `integration/`: Source patch and integration notes for the required GWToolbox++ core hook.
 - `server/server.js`: Native Node.js + SQLite collector server.
 - `start-server.bat`: Windows launcher for the collector server.
 - `schema.sql`: SQLite database schema for kills, drops, vendor transactions, and Auction House listings.

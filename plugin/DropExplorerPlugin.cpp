@@ -17,7 +17,6 @@
 #include <Utils/GuiUtils.h>
 #include <Utils/TextUtils.h>
 #include <Utils/ToolboxUtils.h>
-#include <Defines.h>
 
 #include <glaze/glaze.hpp>
 #include <imgui.h>
@@ -66,6 +65,70 @@ namespace {
             else if (!inside_tag) output.push_back(c);
         }
         return output;
+    }
+
+    const std::vector<std::string>& GetAuctionInscriptionOptions()
+    {
+        static const std::vector<std::string> options = {
+            "None", "Aptitude not Attitude", "Be Just and Fear Not", "Brawn over Brains", "Cast Out the Unclean",
+            "Dance with Death", "Don't call it a comeback!", "Don't Fear the Reaper", "Don't Think Twice", "Down But Not Out",
+            "Faith is My Shield", "Fear Cuts Deeper", "Forget Me Not", "Guided by Fate", "Hail to the King", "Hale and Hearty",
+            "Have Faith", "I am Sorrow.", "I Can See Clearly Now", "I have the power!", "Ignorance is Bliss",
+            "Knowing is Half the Battle.", "Leaf on the Wind", "Let the Memory Live Again", "Life is Pain", "Like a Rolling Stone",
+            "Live for Today", "Luck of the Draw", "Man for All Seasons", "Master of My Domain", "Measure for Measure",
+            "Might makes Right", "Not the face!", "Nothing to Fear", "Only the Strong Survive", "Pure of Heart",
+            "Riders on the Storm", "Run For Your Life!", "Seize the Day", "Serenity Now", "Sheltered by Faith",
+            "Show me the money!", "Sleep Now in the Fire", "Soundness of Mind", "Strength and Honor", "Strength of Body",
+            "Survival of the Fittest", "Swift as the Wind", "The Riddle of Steel", "Through Thick and Thin", "To the Pain!",
+            "Too Much Information", "Vengeance is Mine"
+        };
+        return options;
+    }
+
+    const std::vector<std::string>& GetAuctionInsigniaOptions()
+    {
+        static const std::vector<std::string> options = {
+            "None", "Aeromancer Insignia", "Anchorite's Insignia", "Artificer's Insignia", "Beastmaster's Insignia",
+            "Blessed Insignia", "Blighter's Insignia", "Bloodstained Insignia", "Bonelace Insignia", "Brawler's Insignia",
+            "Centurion's Insignia", "Disciple's Insignia", "Dreadnought Insignia", "Earthbound Insignia", "Forsaken Insignia",
+            "Frostbound Insignia", "Geomancer Insignia", "Ghost Forge Insignia", "Herald's Insignia", "Hydromancer Insignia",
+            "Infiltrator's Insignia", "Knight's Insignia", "Lieutenant's Insignia", "Minion Master's Insignia", "Mystic's Insignia",
+            "Nightstalker's Insignia", "Prismatic Insignia", "Prodigy's Insignia", "Pyrebound Insignia", "Pyromancer Insignia",
+            "Radiant Insignia", "Saboteur's Insignia", "Scout's Insignia", "Sentinel's Insignia", "Sentry's Insignia",
+            "Shaman's Insignia", "Stalwart Insignia", "Stonefist Insignia", "Stormbound Insignia", "Survivor Insignia",
+            "Tormentor's Insignia", "Undertaker's Insignia", "Vanguard's Insignia", "Virtuoso's Insignia", "Wanderer's Insignia",
+            "Windwalker Insignia"
+        };
+        return options;
+    }
+
+    const std::vector<std::string>& GetAuctionRuneOptions()
+    {
+        static const auto options = [] {
+            std::vector<std::string> values = {
+                "None", "Rune of Attunement", "Rune of Clarity", "Rune of Purity", "Rune of Recovery", "Rune of Restoration",
+                "Rune of Vitae", "Rune of Minor Vigor", "Rune of Major Vigor", "Rune of Superior Vigor"
+            };
+            constexpr std::pair<const char*, const char*> attributes[] = {
+                {"Warrior", "Strength"}, {"Warrior", "Axe Mastery"}, {"Warrior", "Hammer Mastery"}, {"Warrior", "Swordsmanship"}, {"Warrior", "Tactics"},
+                {"Ranger", "Expertise"}, {"Ranger", "Beast Mastery"}, {"Ranger", "Marksmanship"}, {"Ranger", "Wilderness Survival"},
+                {"Monk", "Divine Favor"}, {"Monk", "Healing Prayers"}, {"Monk", "Protection Prayers"}, {"Monk", "Smiting Prayers"},
+                {"Necromancer", "Soul Reaping"}, {"Necromancer", "Blood Magic"}, {"Necromancer", "Curses"}, {"Necromancer", "Death Magic"},
+                {"Mesmer", "Fast Casting"}, {"Mesmer", "Domination Magic"}, {"Mesmer", "Illusion Magic"}, {"Mesmer", "Inspiration Magic"},
+                {"Elementalist", "Energy Storage"}, {"Elementalist", "Air Magic"}, {"Elementalist", "Earth Magic"}, {"Elementalist", "Fire Magic"}, {"Elementalist", "Water Magic"},
+                {"Assassin", "Critical Strikes"}, {"Assassin", "Dagger Mastery"}, {"Assassin", "Deadly Arts"}, {"Assassin", "Shadow Arts"},
+                {"Ritualist", "Spawning Power"}, {"Ritualist", "Channeling Magic"}, {"Ritualist", "Communing"}, {"Ritualist", "Restoration Magic"},
+                {"Paragon", "Leadership"}, {"Paragon", "Command"}, {"Paragon", "Motivation"}, {"Paragon", "Spear Mastery"},
+                {"Dervish", "Mysticism"}, {"Dervish", "Earth Prayers"}, {"Dervish", "Scythe Mastery"}, {"Dervish", "Wind Prayers"}
+            };
+            constexpr const char* ranks[] = {"Minor", "Major", "Superior"};
+            for (const auto& [profession, attribute] : attributes) {
+                for (const auto* rank : ranks) values.emplace_back(std::format("{} Rune of {} {}", profession, rank, attribute));
+            }
+            for (const auto* rank : ranks) values.emplace_back(std::format("Warrior Rune of {} Absorption", rank));
+            return values;
+        }();
+        return options;
     }
 
     ImVec4 GetRarityColor(DropExplorer::DropRarity rarity)
@@ -148,6 +211,9 @@ void DropExplorerPlugin::Initialize(ImGuiContext* ctx, const ImGuiAllocFns alloc
         set_travel_dest_fn_ = reinterpret_cast<SetTravelDestinationMapId_pt>(GetProcAddress(toolbox_dll, "SetTravelDestinationMapId"));
         set_custom_point_fn_ = reinterpret_cast<SetCustomTravelPointGame_pt>(GetProcAddress(toolbox_dll, "SetCustomTravelPointGame"));
         clear_custom_point_fn_ = reinterpret_cast<ClearCustomTravelPoint_pt>(GetProcAddress(toolbox_dll, "ClearCustomTravelPoint"));
+        inventory_add_context_menu_fn_ = reinterpret_cast<InventoryAddContextMenuCallback_pt>(GetProcAddress(toolbox_dll, "InventoryAddContextMenuCallback"));
+        inventory_remove_context_menu_fn_ = reinterpret_cast<InventoryRemoveContextMenuCallback_pt>(GetProcAddress(toolbox_dll, "InventoryRemoveContextMenuCallback"));
+        if (inventory_add_context_menu_fn_) inventory_add_context_menu_fn_(DrawInventoryContextMenuEntry);
     }
 
     zones_ = DropExplorer::GetBuiltinZones();
@@ -157,6 +223,7 @@ void DropExplorerPlugin::Initialize(ImGuiContext* ctx, const ImGuiAllocFns alloc
 
 void DropExplorerPlugin::Terminate()
 {
+    if (inventory_remove_context_menu_fn_) inventory_remove_context_menu_fn_(DrawInventoryContextMenuEntry);
     GW::StoC::RemoveCallback<GW::Packet::StoC::QuotedItemPrice>(&price_quote_entry_);
     GW::StoC::RemoveCallback<GW::Packet::StoC::TransactionDone>(&trans_done_entry_);
     if (telemetry_client_ && telemetry_client_->IsPending()) telemetry_client_->Abort();
@@ -1460,11 +1527,14 @@ void DropExplorerPlugin::CreateAuctionListing()
     const auto append_modifier = [&modifier_parts](const char* label, const char* value) {
         if (value && *value) modifier_parts.emplace_back(std::format("{}: {}", label, value));
     };
-    append_modifier("Inscription", auction_inscription_buf_);
+    const auto& inscriptions = GetAuctionInscriptionOptions();
+    const auto& runes = GetAuctionRuneOptions();
+    const auto& insignias = GetAuctionInsigniaOptions();
+    if (auction_inscription_idx_ > 0 && static_cast<size_t>(auction_inscription_idx_) < inscriptions.size()) append_modifier("Inscription", inscriptions[auction_inscription_idx_].c_str());
     append_modifier("Weapon prefix", auction_weapon_prefix_buf_);
     append_modifier("Weapon suffix", auction_weapon_suffix_buf_);
-    append_modifier("Rune", auction_rune_buf_);
-    append_modifier("Insignia", auction_insignia_buf_);
+    if (auction_rune_idx_ > 0 && static_cast<size_t>(auction_rune_idx_) < runes.size()) append_modifier("Rune", runes[auction_rune_idx_].c_str());
+    if (auction_insignia_idx_ > 0 && static_cast<size_t>(auction_insignia_idx_) < insignias.size()) append_modifier("Insignia", insignias[auction_insignia_idx_].c_str());
     append_modifier(auction_item_from_inventory_ ? "Detected item stats" : "Other requirements", auction_modifiers_buf_);
     request.modifiers.clear();
     for (const auto& part : modifier_parts) {
@@ -1517,7 +1587,20 @@ void DropExplorerPlugin::UpdateAuctionRequest(const float delta)
     }
     if (auction_item_details_decoder_ && !auction_item_details_decoder_->IsDecoding()) {
         const auto details = StripXmlTags(auction_item_details_decoder_->string());
-        if (!details.empty()) PluginUtils::StrCopy(auction_modifiers_buf_, details.c_str(), IM_ARRAYSIZE(auction_modifiers_buf_));
+        if (!details.empty()) {
+            PluginUtils::StrCopy(auction_modifiers_buf_, details.c_str(), IM_ARRAYSIZE(auction_modifiers_buf_));
+            const auto select_detected = [&details](const std::vector<std::string>& options, int& selected) {
+                selected = 0;
+                for (size_t i = 1; i < options.size(); ++i) {
+                    if (!CaseInsensitiveContains(details, options[i])) continue;
+                    selected = static_cast<int>(i);
+                    break;
+                }
+            };
+            select_detected(GetAuctionInscriptionOptions(), auction_inscription_idx_);
+            select_detected(GetAuctionRuneOptions(), auction_rune_idx_);
+            select_detected(GetAuctionInsigniaOptions(), auction_insignia_idx_);
+        }
         auction_item_details_decoder_.reset();
     }
     if (auction_request_kind_ == AuctionRequestKind::None) {
@@ -1545,11 +1628,11 @@ void DropExplorerPlugin::UpdateAuctionRequest(const float delta)
         auction_item_buf_[0] = 0;
         auction_notes_buf_[0] = 0;
         auction_modifiers_buf_[0] = 0;
-        auction_inscription_buf_[0] = 0;
         auction_weapon_prefix_buf_[0] = 0;
         auction_weapon_suffix_buf_[0] = 0;
-        auction_rune_buf_[0] = 0;
-        auction_insignia_buf_[0] = 0;
+        auction_inscription_idx_ = 0;
+        auction_rune_idx_ = 0;
+        auction_insignia_idx_ = 0;
         auction_other_currency_buf_[0] = 0;
         auction_item_model_id_ = 0;
         auction_quantity_ = 1;
@@ -1575,11 +1658,11 @@ void DropExplorerPlugin::PrefillAuctionItem(const GW::Item* item)
     auction_type_idx_ = 0;
     auction_item_buf_[0] = 0;
     auction_modifiers_buf_[0] = 0;
-    auction_inscription_buf_[0] = 0;
     auction_weapon_prefix_buf_[0] = 0;
     auction_weapon_suffix_buf_[0] = 0;
-    auction_rune_buf_[0] = 0;
-    auction_insignia_buf_[0] = 0;
+    auction_inscription_idx_ = 0;
+    auction_rune_idx_ = 0;
+    auction_insignia_idx_ = 0;
     auction_equipment_type_idx_ = 0;
     switch (item->type) {
         case GW::Constants::ItemType::Axe:
@@ -1612,48 +1695,34 @@ void DropExplorerPlugin::PrefillAuctionItem(const GW::Item* item)
     if (item->info_string && *item->info_string) {
         auction_item_details_decoder_ = std::make_unique<PluginUtils::EncString>(item->info_string, true);
     }
-    auction_focus_requested_ = true;
-    current_tab_ = 2;
-    if (const auto visible = GetVisiblePtr()) *visible = true;
 }
 
-bool DropExplorerPlugin::WndProc(const UINT message, const WPARAM, const LPARAM)
+bool __cdecl DropExplorerPlugin::DrawInventoryContextMenuEntry(const uint32_t item_id, const float width)
 {
-    if (message != WM_GW_RBUTTONCLICK) return false;
-    const auto* item = GW::Items::GetHoveredItem();
-    if (!item || !item->bag || !item->bag->IsInventoryBag()) return false;
-    auction_context_item_id_ = item->item_id;
-    PrefillAuctionItem(item);
-    auction_context_prompt_ = true;
-    return false;
+    const auto* item = GW::Items::GetItemById(item_id);
+    if (!item || !item->bag || !item->bag->IsInventoryBag()) return true;
+    const auto open_listing = [item](const int listing_type) {
+        auto* plugin = static_cast<DropExplorerPlugin*>(ToolboxPluginInstance());
+        plugin->PrefillAuctionItem(item);
+        plugin->auction_type_idx_ = listing_type;
+        plugin->auction_focus_requested_ = true;
+        plugin->current_tab_ = 2;
+        if (const auto visible = plugin->GetVisiblePtr()) *visible = true;
+        ImGui::SetWindowCollapsed(plugin->Name(), false);
+    };
+    if (ImGui::Button("List in Auction House", ImVec2(width, 0.0f))) {
+        open_listing(0);
+        return false;
+    }
+    if (ImGui::Button("Create Auction Buy Order", ImVec2(width, 0.0f))) {
+        open_listing(1);
+        return false;
+    }
+    return true;
 }
 
 void DropExplorerPlugin::DrawAuctionHouseView()
 {
-    if (auction_context_prompt_) {
-        ImGui::OpenPopup("Inventory Auction Action");
-        auction_context_prompt_ = false;
-    }
-    if (ImGui::BeginPopupModal("Inventory Auction Action", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextWrapped("Create an Auction House listing for %s?", auction_item_buf_[0] ? auction_item_buf_ : "this inventory item");
-        if (ImGui::Button("Sell This Item")) {
-            auction_type_idx_ = 0;
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Buy Order")) {
-            auction_type_idx_ = 1;
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel")) {
-            auction_item_buf_[0] = 0;
-            auction_modifiers_buf_[0] = 0;
-            auction_item_model_id_ = 0;
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
-    }
     if (auction_refresh_timer_ >= 60.0f && auction_request_kind_ == AuctionRequestKind::None) RefreshAuctionListings();
     ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f), "Player Auction House");
     ImGui::SameLine();
@@ -1701,16 +1770,27 @@ void DropExplorerPlugin::DrawAuctionHouseView()
     const char* equipment_types[] = {"Not equipment", "Weapon / offhand", "Armor"};
     ImGui::SetNextItemWidth(260.0f);
     ImGui::Combo("Equipment type", &auction_equipment_type_idx_, equipment_types, IM_ARRAYSIZE(equipment_types));
+    const auto draw_modifier_combo = [](const char* label, const std::vector<std::string>& options, int& selected) {
+        selected = std::clamp(selected, 0, static_cast<int>(options.size()) - 1);
+        ImGui::SetNextItemWidth(320.0f);
+        if (!ImGui::BeginCombo(label, options[selected].c_str())) return;
+        for (size_t i = 0; i < options.size(); ++i) {
+            const auto is_selected = selected == static_cast<int>(i);
+            if (ImGui::Selectable(options[i].c_str(), is_selected)) selected = static_cast<int>(i);
+            if (is_selected) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    };
     if (auction_equipment_type_idx_ == 1) {
         ImGui::SeparatorText("Weapon modifiers");
-        ImGui::InputTextWithHint("Inscription", "e.g. Strength and Honor", auction_inscription_buf_, IM_ARRAYSIZE(auction_inscription_buf_));
+        draw_modifier_combo("Inscription", GetAuctionInscriptionOptions(), auction_inscription_idx_);
         ImGui::InputTextWithHint("Prefix upgrade", "e.g. Sundering, Vampiric, Fiery", auction_weapon_prefix_buf_, IM_ARRAYSIZE(auction_weapon_prefix_buf_));
         ImGui::InputTextWithHint("Suffix upgrade", "e.g. Fortitude, Enchanting", auction_weapon_suffix_buf_, IM_ARRAYSIZE(auction_weapon_suffix_buf_));
     }
     else if (auction_equipment_type_idx_ == 2) {
         ImGui::SeparatorText("Armor modifiers");
-        ImGui::InputTextWithHint("Insignia", "e.g. Survivor, Radiant", auction_insignia_buf_, IM_ARRAYSIZE(auction_insignia_buf_));
-        ImGui::InputTextWithHint("Rune", "e.g. Superior Vigor", auction_rune_buf_, IM_ARRAYSIZE(auction_rune_buf_));
+        draw_modifier_combo("Insignia", GetAuctionInsigniaOptions(), auction_insignia_idx_);
+        draw_modifier_combo("Rune", GetAuctionRuneOptions(), auction_rune_idx_);
     }
     ImGui::TextUnformatted(auction_item_from_inventory_ ? "Detected item stats and modifiers" : "Other modifier requirements");
     ImGui::InputTextMultiline("##AuctionModifiers", auction_modifiers_buf_, IM_ARRAYSIZE(auction_modifiers_buf_), ImVec2(-1.0f, 58.0f));

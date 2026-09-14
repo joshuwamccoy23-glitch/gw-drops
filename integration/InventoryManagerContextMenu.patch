@@ -1,0 +1,44 @@
+diff --git a/GWToolboxdll/Modules/InventoryManager.cpp b/GWToolboxdll/Modules/InventoryManager.cpp
+--- a/GWToolboxdll/Modules/InventoryManager.cpp
++++ b/GWToolboxdll/Modules/InventoryManager.cpp
+@@
+     bool show_item_context_menu = false;
++    using InventoryContextMenuCallback = bool(__cdecl*)(uint32_t item_id, float width);
++    std::vector<InventoryContextMenuCallback> inventory_context_menu_callbacks;
+@@
+         if (settings.market_search_on_context_menu) {
+             return true;
+         }
++        if (!inventory_context_menu_callbacks.empty()) {
++            return true;
++        }
+         return item->IsIdentificationKit() || item->IsSalvageKit();
+@@
+     if (GWMarketWindow::CanSellItem(context_item.item())) {
+         if (ImGui::Button("Sell Item on Market", size)) {
+             ImGui::CloseCurrentPopup();
+             GWMarketWindow::AddItemToSell(context_item.item());
+             goto end_popup;
+         }
+     }
++    for (const auto callback : inventory_context_menu_callbacks) {
++        if (!callback(context_item_actual->item_id, size.x)) {
++            ImGui::CloseCurrentPopup();
++            goto end_popup;
++        }
++    }
+@@
+     return true;
+ }
++
++extern "C" __declspec(dllexport) void __cdecl InventoryAddContextMenuCallback(bool(__cdecl* callback)(uint32_t, float))
++{
++    if (callback && !std::ranges::contains(inventory_context_menu_callbacks, callback)) inventory_context_menu_callbacks.push_back(callback);
++}
++
++extern "C" __declspec(dllexport) void __cdecl InventoryRemoveContextMenuCallback(bool(__cdecl* callback)(uint32_t, float))
++{
++    std::erase(inventory_context_menu_callbacks, callback);
++}
+ 
+ uint16_t InventoryManager::MoveItem(const Item* item, const uint16_t quantity)
