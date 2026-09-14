@@ -1,18 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-09-14T20:59:01.814Z",
-  "record_count": 1,
-  "prices": [
-    {
-      "item_model_id": 999,
-      "item_name": "Chitin",
-      "vendor_type": "material_trader",
-      "transaction_type": "sell",
-      "sample_count": 2,
-      "avg_price": 125,
-      "min_price": 120,
-      "max_price": 130,
-      "last_observed_at": 1789419541
-    }
-  ]
+  "generated_at": "2026-09-14T21:09:56.145Z",
+  "record_count": 0,
+  "prices": []
 }
