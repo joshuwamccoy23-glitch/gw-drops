@@ -17,6 +17,7 @@
 #include <Utils/GuiUtils.h>
 #include <Utils/TextUtils.h>
 #include <Utils/ToolboxUtils.h>
+#include <Defines.h>
 
 #include <glaze/glaze.hpp>
 #include <imgui.h>
@@ -142,10 +143,6 @@ void DropExplorerPlugin::Initialize(ImGuiContext* ctx, const ImGuiAllocFns alloc
     GW::StoC::RegisterPacketCallback<GW::Packet::StoC::TransactionDone>(&trans_done_entry_, [this](GW::HookStatus*, const GW::Packet::StoC::TransactionDone* packet) {
         OnTransactionDone(packet);
     });
-    GW::Items::RegisterItemClickCallback(&auction_item_click_entry_, [this](GW::HookStatus* status, GW::UI::UIPacket::kMouseAction* action, GW::Item* item) {
-        OnInventoryItemClick(status, action, item);
-    });
-
     if (toolbox_dll) {
         get_item_image_fn_ = reinterpret_cast<GetItemImageByName_pt>(GetProcAddress(toolbox_dll, "GetItemImageByName"));
         set_travel_dest_fn_ = reinterpret_cast<SetTravelDestinationMapId_pt>(GetProcAddress(toolbox_dll, "SetTravelDestinationMapId"));
@@ -162,7 +159,6 @@ void DropExplorerPlugin::Terminate()
 {
     GW::StoC::RemoveCallback<GW::Packet::StoC::QuotedItemPrice>(&price_quote_entry_);
     GW::StoC::RemoveCallback<GW::Packet::StoC::TransactionDone>(&trans_done_entry_);
-    GW::Items::RemoveItemClickCallback(&auction_item_click_entry_);
     if (telemetry_client_ && telemetry_client_->IsPending()) telemetry_client_->Abort();
     if (rates_client_ && rates_client_->IsPending()) rates_client_->Abort();
     if (vendor_prices_client_ && vendor_prices_client_->IsPending()) vendor_prices_client_->Abort();
@@ -1453,7 +1449,21 @@ void DropExplorerPlugin::CreateAuctionListing()
     request.quantity = static_cast<uint32_t>(std::max(1, auction_quantity_));
     request.unit_price = static_cast<uint32_t>(std::max(0, auction_unit_price_));
     request.notes = auction_notes_buf_;
-    request.modifiers = auction_modifiers_buf_;
+    std::vector<std::string> modifier_parts;
+    const auto append_modifier = [&modifier_parts](const char* label, const char* value) {
+        if (value && *value) modifier_parts.emplace_back(std::format("{}: {}", label, value));
+    };
+    append_modifier("Inscription", auction_inscription_buf_);
+    append_modifier("Weapon prefix", auction_weapon_prefix_buf_);
+    append_modifier("Weapon suffix", auction_weapon_suffix_buf_);
+    append_modifier("Rune", auction_rune_buf_);
+    append_modifier("Insignia", auction_insignia_buf_);
+    append_modifier(auction_item_from_inventory_ ? "Detected item stats" : "Other requirements", auction_modifiers_buf_);
+    request.modifiers.clear();
+    for (const auto& part : modifier_parts) {
+        if (!request.modifiers.empty()) request.modifiers += " | ";
+        request.modifiers += part;
+    }
     request.duration_hours = static_cast<uint32_t>(std::clamp(auction_duration_hours_, 1, 168));
     const auto payload = glz::write_json(request).value_or(std::string{});
     if (payload.empty()) {
@@ -1525,6 +1535,18 @@ void DropExplorerPlugin::UpdateAuctionRequest(const float delta)
     else if (successful && completed_kind == AuctionRequestKind::Create) {
         auction_status_ = "Listing published";
         auction_publish_name_confirmed_ = false;
+        auction_item_buf_[0] = 0;
+        auction_notes_buf_[0] = 0;
+        auction_modifiers_buf_[0] = 0;
+        auction_inscription_buf_[0] = 0;
+        auction_weapon_prefix_buf_[0] = 0;
+        auction_weapon_suffix_buf_[0] = 0;
+        auction_rune_buf_[0] = 0;
+        auction_insignia_buf_[0] = 0;
+        auction_item_model_id_ = 0;
+        auction_quantity_ = 1;
+        auction_show_matches_ = false;
+        auction_item_from_inventory_ = false;
     }
     else if (successful && completed_kind == AuctionRequestKind::Cancel) {
         auction_status_ = "Listing cancelled";
@@ -1544,6 +1566,38 @@ void DropExplorerPlugin::PrefillAuctionItem(const GW::Item* item)
     auction_type_idx_ = 0;
     auction_item_buf_[0] = 0;
     auction_modifiers_buf_[0] = 0;
+    auction_inscription_buf_[0] = 0;
+    auction_weapon_prefix_buf_[0] = 0;
+    auction_weapon_suffix_buf_[0] = 0;
+    auction_rune_buf_[0] = 0;
+    auction_insignia_buf_[0] = 0;
+    auction_equipment_type_idx_ = 0;
+    switch (item->type) {
+        case GW::Constants::ItemType::Axe:
+        case GW::Constants::ItemType::Bow:
+        case GW::Constants::ItemType::Daggers:
+        case GW::Constants::ItemType::Hammer:
+        case GW::Constants::ItemType::Offhand:
+        case GW::Constants::ItemType::Scythe:
+        case GW::Constants::ItemType::Shield:
+        case GW::Constants::ItemType::Spear:
+        case GW::Constants::ItemType::Staff:
+        case GW::Constants::ItemType::Sword:
+        case GW::Constants::ItemType::Wand:
+            auction_equipment_type_idx_ = 1;
+            break;
+        case GW::Constants::ItemType::Boots:
+        case GW::Constants::ItemType::Chestpiece:
+        case GW::Constants::ItemType::Gloves:
+        case GW::Constants::ItemType::Headpiece:
+        case GW::Constants::ItemType::Leggings:
+            auction_equipment_type_idx_ = 2;
+            break;
+        default:
+            break;
+    }
+    auction_show_matches_ = false;
+    auction_item_from_inventory_ = true;
     auction_item_name_decoder_ = std::make_unique<PluginUtils::EncString>(
         item->single_item_name && *item->single_item_name ? item->single_item_name : item->name_enc, true);
     if (item->info_string && *item->info_string) {
@@ -1554,12 +1608,15 @@ void DropExplorerPlugin::PrefillAuctionItem(const GW::Item* item)
     if (const auto visible = GetVisiblePtr()) *visible = true;
 }
 
-void DropExplorerPlugin::OnInventoryItemClick(GW::HookStatus*, GW::UI::UIPacket::kMouseAction* action, GW::Item* item)
+bool DropExplorerPlugin::WndProc(const UINT message, const WPARAM, const LPARAM)
 {
-    if (!action || !item || action->current_state != static_cast<GW::UI::UIPacket::ActionState>(999u)) return;
+    if (message != WM_GW_RBUTTONCLICK) return false;
+    const auto* item = GW::Items::GetHoveredItem();
+    if (!item || !item->bag || !item->bag->IsInventoryBag()) return false;
     auction_context_item_id_ = item->item_id;
     PrefillAuctionItem(item);
     auction_context_prompt_ = true;
+    return false;
 }
 
 void DropExplorerPlugin::DrawAuctionHouseView()
@@ -1569,8 +1626,16 @@ void DropExplorerPlugin::DrawAuctionHouseView()
         auction_context_prompt_ = false;
     }
     if (ImGui::BeginPopupModal("Inventory Auction Action", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextWrapped("List %s in the Auction House?", auction_item_buf_[0] ? auction_item_buf_ : "this inventory item");
-        if (ImGui::Button("List in Auction House")) ImGui::CloseCurrentPopup();
+        ImGui::TextWrapped("Create an Auction House listing for %s?", auction_item_buf_[0] ? auction_item_buf_ : "this inventory item");
+        if (ImGui::Button("Sell This Item")) {
+            auction_type_idx_ = 0;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Buy Order")) {
+            auction_type_idx_ = 1;
+            ImGui::CloseCurrentPopup();
+        }
         ImGui::SameLine();
         if (ImGui::Button("Cancel")) {
             auction_item_buf_[0] = 0;
@@ -1590,9 +1655,16 @@ void DropExplorerPlugin::DrawAuctionHouseView()
     ImGui::Separator();
 
     const char* listing_types[] = {"Sell", "Buy Order"};
+    ImGui::SetNextItemWidth(260.0f);
     ImGui::Combo("Listing type", &auction_type_idx_, listing_types, IM_ARRAYSIZE(listing_types));
-    ImGui::InputTextWithHint("Item", "Type an item name or select a match below", auction_item_buf_, IM_ARRAYSIZE(auction_item_buf_));
-    if (auction_item_buf_[0]) {
+    ImGui::TextUnformatted("Item");
+    ImGui::SetNextItemWidth(-1.0f);
+    if (ImGui::InputTextWithHint("##AuctionItem", "Type an item name", auction_item_buf_, IM_ARRAYSIZE(auction_item_buf_))) {
+        auction_show_matches_ = auction_item_buf_[0] != 0;
+        auction_item_from_inventory_ = false;
+        auction_item_model_id_ = 0;
+    }
+    if (auction_show_matches_ && auction_item_buf_[0]) {
         auto shown = 0;
         if (ImGui::BeginChild("##AuctionMatches", ImVec2(0.0f, ImGui::GetTextLineHeightWithSpacing() * 4.0f), true)) {
             std::unordered_set<std::string> names;
@@ -1601,6 +1673,7 @@ void DropExplorerPlugin::DrawAuctionHouseView()
                 if (ImGui::Selectable(item.item_name.c_str())) {
                     PluginUtils::StrCopy(auction_item_buf_, item.item_name.c_str(), IM_ARRAYSIZE(auction_item_buf_));
                     auction_item_model_id_ = 0;
+                    auction_show_matches_ = false;
                 }
                 ++shown;
             }
@@ -1610,8 +1683,27 @@ void DropExplorerPlugin::DrawAuctionHouseView()
     ImGui::InputInt("Quantity", &auction_quantity_);
     ImGui::InputInt("Unit price (gold)", &auction_unit_price_);
     ImGui::InputInt("Duration (hours)", &auction_duration_hours_);
-    ImGui::InputTextMultiline("Inscriptions / runes / insignias / modifiers", auction_modifiers_buf_, IM_ARRAYSIZE(auction_modifiers_buf_), ImVec2(-1.0f, 58.0f));
-    ImGui::InputTextMultiline("Notes", auction_notes_buf_, IM_ARRAYSIZE(auction_notes_buf_), ImVec2(-1.0f, 42.0f));
+    const char* equipment_types[] = {"Not equipment", "Weapon / offhand", "Armor"};
+    ImGui::SetNextItemWidth(260.0f);
+    ImGui::Combo("Equipment type", &auction_equipment_type_idx_, equipment_types, IM_ARRAYSIZE(equipment_types));
+    if (auction_equipment_type_idx_ == 1) {
+        ImGui::SeparatorText("Weapon modifiers");
+        ImGui::InputTextWithHint("Inscription", "e.g. Strength and Honor", auction_inscription_buf_, IM_ARRAYSIZE(auction_inscription_buf_));
+        ImGui::InputTextWithHint("Prefix upgrade", "e.g. Sundering, Vampiric, Fiery", auction_weapon_prefix_buf_, IM_ARRAYSIZE(auction_weapon_prefix_buf_));
+        ImGui::InputTextWithHint("Suffix upgrade", "e.g. Fortitude, Enchanting", auction_weapon_suffix_buf_, IM_ARRAYSIZE(auction_weapon_suffix_buf_));
+    }
+    else if (auction_equipment_type_idx_ == 2) {
+        ImGui::SeparatorText("Armor modifiers");
+        ImGui::InputTextWithHint("Insignia", "e.g. Survivor, Radiant", auction_insignia_buf_, IM_ARRAYSIZE(auction_insignia_buf_));
+        ImGui::InputTextWithHint("Rune", "e.g. Superior Vigor", auction_rune_buf_, IM_ARRAYSIZE(auction_rune_buf_));
+    }
+    ImGui::TextUnformatted(auction_item_from_inventory_ ? "Detected item stats and modifiers" : "Other modifier requirements");
+    ImGui::InputTextMultiline("##AuctionModifiers", auction_modifiers_buf_, IM_ARRAYSIZE(auction_modifiers_buf_), ImVec2(-1.0f, 58.0f));
+    if (auction_item_from_inventory_ && !auction_modifiers_buf_[0] && !auction_item_details_decoder_) {
+        ImGui::TextDisabled("No readable modifiers found. The item may need to be identified.");
+    }
+    ImGui::TextUnformatted("Listing notes");
+    ImGui::InputTextMultiline("##AuctionNotes", auction_notes_buf_, IM_ARRAYSIZE(auction_notes_buf_), ImVec2(-1.0f, 42.0f));
     ImGui::Checkbox("Publish my current character name so buyers/sellers can whisper me", &auction_publish_name_confirmed_);
     if (!auction_publish_name_confirmed_) ImGui::BeginDisabled();
     if (ImGui::Button("Publish Listing")) CreateAuctionListing();
