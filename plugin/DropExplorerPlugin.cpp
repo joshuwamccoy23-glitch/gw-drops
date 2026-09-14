@@ -242,10 +242,10 @@ void DropExplorerPlugin::LoadSettings(const wchar_t* folder)
     LoadSetting("telemetry_install_id", telemetry_install_id_);
     auto endpoint = std::string{};
     LoadSetting("telemetry_endpoint", endpoint);
-    if (!endpoint.empty()) {
+    if (!endpoint.empty() && endpoint.find("173.189.220.88") == std::string::npos) {
         PluginUtils::StrCopy(telemetry_endpoint_, endpoint.c_str(), IM_ARRAYSIZE(telemetry_endpoint_));
     } else {
-        PluginUtils::StrCopy(telemetry_endpoint_, "http://173.189.220.88:8787/v1/telemetry", IM_ARRAYSIZE(telemetry_endpoint_));
+        PluginUtils::StrCopy(telemetry_endpoint_, "https://escape-championship-screening-international.trycloudflare.com/v1/telemetry", IM_ARRAYSIZE(telemetry_endpoint_));
     }
     LoadSetting("batch_interval_minutes", batch_interval_minutes_);
     if (batch_interval_minutes_ < 1.0f) batch_interval_minutes_ = 5.0f;
