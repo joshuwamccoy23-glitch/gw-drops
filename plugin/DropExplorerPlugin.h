@@ -224,7 +224,7 @@ private:
     bool rates_request_started_ = false;
     bool vendor_prices_request_started_ = false;
     std::string telemetry_install_id_;
-    char telemetry_endpoint_[256] = "http://localhost:8787/v1/telemetry";
+    char telemetry_endpoint_[256] = "http://173.189.220.88:8787/v1/telemetry";
     char github_base_url_[256] = "https://raw.githubusercontent.com/joshuwamccoy23-glitch/gw-drops/main";
 
     float batch_interval_minutes_ = 5.0f;

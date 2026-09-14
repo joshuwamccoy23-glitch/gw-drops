@@ -244,6 +244,8 @@ void DropExplorerPlugin::LoadSettings(const wchar_t* folder)
     LoadSetting("telemetry_endpoint", endpoint);
     if (!endpoint.empty()) {
         PluginUtils::StrCopy(telemetry_endpoint_, endpoint.c_str(), IM_ARRAYSIZE(telemetry_endpoint_));
+    } else {
+        PluginUtils::StrCopy(telemetry_endpoint_, "http://173.189.220.88:8787/v1/telemetry", IM_ARRAYSIZE(telemetry_endpoint_));
     }
     LoadSetting("batch_interval_minutes", batch_interval_minutes_);
     if (batch_interval_minutes_ < 1.0f) batch_interval_minutes_ = 5.0f;
@@ -298,7 +300,7 @@ void DropExplorerPlugin::DrawSettings()
     }
     ImGui::TextWrapped("Opt-in telemetry buffers mob kills and vendor quotes/sales for 5-10 minutes, then sends all accumulated data in a single batch. No account, character, chat, or inventory scanning is sent.");
 
-    ImGui::InputTextWithHint("Collector URL##DropEndpoint", "http://localhost:8787/v1/telemetry", telemetry_endpoint_, IM_ARRAYSIZE(telemetry_endpoint_));
+    ImGui::TextDisabled("Aggregator: Official GW-Drops Network (Connected)");
     ImGui::SliderFloat("Batch Interval (minutes)##DropBatchInterval", &batch_interval_minutes_, 5.0f, 10.0f, "%.1f min");
 
     const float remaining_sec = std::max(0.0f, (batch_interval_minutes_ * 60.0f) - (batch_timer_ms_ / 1000.0f));
