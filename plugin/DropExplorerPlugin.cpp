@@ -1448,6 +1448,13 @@ void DropExplorerPlugin::CreateAuctionListing()
     request.item_model_id = auction_item_model_id_;
     request.quantity = static_cast<uint32_t>(std::max(1, auction_quantity_));
     request.unit_price = static_cast<uint32_t>(std::max(0, auction_unit_price_));
+    constexpr const char* currency_types[] = {"gold", "platinum", "armbrace", "ectoplasm", "other"};
+    request.currency_type = currency_types[std::clamp(auction_currency_idx_, 0, 4)];
+    request.currency_item = auction_currency_idx_ == 4 ? auction_other_currency_buf_ : "";
+    if (request.currency_type == "other" && request.currency_item.empty()) {
+        auction_status_ = "Type the requested currency item";
+        return;
+    }
     request.notes = auction_notes_buf_;
     std::vector<std::string> modifier_parts;
     const auto append_modifier = [&modifier_parts](const char* label, const char* value) {
@@ -1523,7 +1530,7 @@ void DropExplorerPlugin::UpdateAuctionRequest(const float delta)
     const auto successful = auction_client_->IsSuccessful();
     if (successful && completed_kind == AuctionRequestKind::Refresh) {
         AuctionListingsDocument document;
-        if (!glz::read_json(document, auction_client_->GetContent()) && document.schema_version == 1) {
+        if (!glz::read_json(document, auction_client_->GetContent()) && document.schema_version == 2) {
             auction_listings_ = std::move(document.listings);
             auction_status_ = std::format("{} active listings", auction_listings_.size());
             auction_refresh_timer_ = 0.0f;
@@ -1543,8 +1550,10 @@ void DropExplorerPlugin::UpdateAuctionRequest(const float delta)
         auction_weapon_suffix_buf_[0] = 0;
         auction_rune_buf_[0] = 0;
         auction_insignia_buf_[0] = 0;
+        auction_other_currency_buf_[0] = 0;
         auction_item_model_id_ = 0;
         auction_quantity_ = 1;
+        auction_currency_idx_ = 0;
         auction_show_matches_ = false;
         auction_item_from_inventory_ = false;
     }
@@ -1681,7 +1690,13 @@ void DropExplorerPlugin::DrawAuctionHouseView()
         ImGui::EndChild();
     }
     ImGui::InputInt("Quantity", &auction_quantity_);
-    ImGui::InputInt("Unit price (gold)", &auction_unit_price_);
+    ImGui::InputInt("Price amount (per item)", &auction_unit_price_);
+    const char* currencies[] = {"Gold", "Platinum", "Armbraces of Truth", "Globs of Ectoplasm", "Other item"};
+    ImGui::SetNextItemWidth(260.0f);
+    ImGui::Combo("Payment currency", &auction_currency_idx_, currencies, IM_ARRAYSIZE(currencies));
+    if (auction_currency_idx_ == 4) {
+        ImGui::InputTextWithHint("Other payment item", "Type the exact item name", auction_other_currency_buf_, IM_ARRAYSIZE(auction_other_currency_buf_));
+    }
     ImGui::InputInt("Duration (hours)", &auction_duration_hours_);
     const char* equipment_types[] = {"Not equipment", "Weapon / offhand", "Armor"};
     ImGui::SetNextItemWidth(260.0f);
@@ -1725,20 +1740,25 @@ void DropExplorerPlugin::DrawAuctionHouseView()
         for (const auto& listing : auction_listings_) {
             if (!CaseInsensitiveContains(listing.item_name, auction_search_buf_) && !CaseInsensitiveContains(listing.modifiers, auction_search_buf_)) continue;
             ImGui::PushID(listing.listing_id.c_str());
+            auto price_label = std::format("{} Gold", listing.unit_price);
+            if (listing.currency_type == "platinum") price_label = std::format("{} Platinum", listing.unit_price);
+            else if (listing.currency_type == "armbrace") price_label = std::format("{} Armbraces", listing.unit_price);
+            else if (listing.currency_type == "ectoplasm") price_label = std::format("{} Ectoplasm", listing.unit_price);
+            else if (listing.currency_type == "other") price_label = std::format("{} {}", listing.unit_price, listing.currency_item.empty() ? "Other" : listing.currency_item);
             ImGui::TableNextRow();
             ImGui::TableNextColumn(); ImGui::TextUnformatted(listing.listing_type == "sell" ? "SELL" : "BUY");
             ImGui::TableNextColumn(); ImGui::TextWrapped("%s", listing.item_name.c_str());
             ImGui::TableNextColumn(); ImGui::TextWrapped("%s", listing.modifiers.empty() ? listing.notes.c_str() : listing.modifiers.c_str());
             ImGui::TableNextColumn(); ImGui::Text("%u", listing.quantity);
-            ImGui::TableNextColumn(); ImGui::Text("%u g", listing.unit_price);
+            ImGui::TableNextColumn(); ImGui::TextWrapped("%s", price_label.c_str());
             ImGui::TableNextColumn(); ImGui::TextWrapped("%s", listing.seller_name.c_str());
             ImGui::TableNextColumn();
             if (listing.seller_name == own_name) {
                 if (ImGui::SmallButton("Cancel")) CancelAuctionListing(listing.listing_id);
             }
             else if (ImGui::SmallButton("Contact")) {
-                const auto message = std::format("Hi, I'm contacting you about your {} listing for {} ({} @ {}g).",
-                                                 listing.listing_type, listing.item_name, listing.quantity, listing.unit_price);
+                const auto message = std::format("Hi, I'm contacting you about your {} listing for {} ({} @ {} each).",
+                                                 listing.listing_type, listing.item_name, listing.quantity, price_label);
                 GW::Chat::SendChat(ToWString(listing.seller_name).c_str(), ToWString(message).c_str());
             }
             ImGui::PopID();

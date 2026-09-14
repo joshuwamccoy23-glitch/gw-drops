@@ -32,6 +32,9 @@ if (fs.existsSync(schemaPath)) {
   const schemaSql = fs.readFileSync(schemaPath, "utf8");
   db.exec(schemaSql);
 }
+const auctionColumns = new Set(db.prepare("PRAGMA table_info(auction_listings)").all().map(column => column.name));
+if (!auctionColumns.has("currency_type")) db.exec("ALTER TABLE auction_listings ADD COLUMN currency_type TEXT NOT NULL DEFAULT 'gold'");
+if (!auctionColumns.has("currency_item")) db.exec("ALTER TABLE auction_listings ADD COLUMN currency_item TEXT NOT NULL DEFAULT ''");
 
 const PORT = parseInt(process.env.PORT || "8787", 10);
 const HOST = process.env.HOST || "0.0.0.0";
@@ -285,13 +288,13 @@ function activeListings(res, parsedUrl) {
   const typeFilter = listingType === "buy" || listingType === "sell" ? listingType : null;
   const limit = Math.min(200, Math.max(1, parseInt(parsedUrl.searchParams.get("limit") || "100", 10)));
   const rows = db.prepare(`
-    SELECT listing_id, seller_name, listing_type, item_name, item_model_id, quantity, unit_price, notes, modifiers, created_at, expires_at
+    SELECT listing_id, seller_name, listing_type, item_name, item_model_id, quantity, unit_price, currency_type, currency_item, notes, modifiers, created_at, expires_at
     FROM auction_listings
     WHERE status = 'active' AND expires_at > ? AND (? = '' OR item_name LIKE ?)
       AND (? IS NULL OR listing_type = ?)
     ORDER BY created_at DESC LIMIT ?
   `).all(now, search, `%${search}%`, typeFilter, typeFilter, limit);
-  return jsonResponse(res, { schema_version: 1, generated_at: new Date().toISOString(), listings: rows });
+  return jsonResponse(res, { schema_version: 2, generated_at: new Date().toISOString(), listings: rows });
 }
 
 async function createListing(req, res) {
@@ -307,10 +310,14 @@ async function createListing(req, res) {
   const validType = body.listing_type === "sell" || body.listing_type === "buy";
   const validQuantity = Number.isInteger(body.quantity) && body.quantity >= 1 && body.quantity <= 250;
   const validPrice = Number.isInteger(body.unit_price) && body.unit_price >= 0 && body.unit_price <= 100000000;
+  const currencyType = typeof body.currency_type === "string" ? body.currency_type : "gold";
+  const validCurrency = ["gold", "platinum", "armbrace", "ectoplasm", "other"].includes(currencyType);
+  const currencyItem = typeof body.currency_item === "string" ? body.currency_item.trim().slice(0, 160) : "";
+  const validCurrencyItem = currencyType !== "other" || currencyItem.length > 0;
   const notes = typeof body.notes === "string" ? body.notes.trim().slice(0, 240) : "";
   const modifiers = typeof body.modifiers === "string" ? body.modifiers.trim().slice(0, 1000) : "";
   const durationHours = Number.isInteger(body.duration_hours) ? Math.min(168, Math.max(1, body.duration_hours)) : 24;
-  if (!validId || !validName || !validItem || !validType || !validQuantity || !validPrice) {
+  if (!validId || !validName || !validItem || !validType || !validQuantity || !validPrice || !validCurrency || !validCurrencyItem) {
     return jsonResponse(res, { error: "Invalid listing" }, 400);
   }
   const now = Math.floor(Date.now() / 1000);
@@ -321,10 +328,10 @@ async function createListing(req, res) {
   const listingId = randomUUID();
   db.prepare(`
     INSERT INTO auction_listings
-      (listing_id, seller_install_id, seller_name, listing_type, item_name, item_model_id, quantity, unit_price, notes, modifiers, created_at, expires_at, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+      (listing_id, seller_install_id, seller_name, listing_type, item_name, item_model_id, quantity, unit_price, currency_type, currency_item, notes, modifiers, created_at, expires_at, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
   `).run(listingId, body.install_id, body.seller_name.trim(), body.listing_type, body.item_name.trim(),
-    Number.isInteger(body.item_model_id) ? body.item_model_id : 0, body.quantity, body.unit_price, notes, modifiers,
+    Number.isInteger(body.item_model_id) ? body.item_model_id : 0, body.quantity, body.unit_price, currencyType, currencyItem, notes, modifiers,
     now, now + durationHours * 3600);
   return jsonResponse(res, { status: "ok", listing_id: listingId }, 201);
 }

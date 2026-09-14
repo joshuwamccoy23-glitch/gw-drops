@@ -170,6 +170,8 @@ private:
         uint32_t item_model_id = 0;
         uint32_t quantity = 1;
         uint32_t unit_price = 0;
+        std::string currency_type = "gold";
+        std::string currency_item;
         std::string notes;
         std::string modifiers;
         uint64_t created_at = 0;
@@ -190,6 +192,8 @@ private:
         uint32_t item_model_id = 0;
         uint32_t quantity = 1;
         uint32_t unit_price = 0;
+        std::string currency_type = "gold";
+        std::string currency_item;
         std::string notes;
         std::string modifiers;
         uint32_t duration_hours = 24;
@@ -314,8 +318,10 @@ private:
     char auction_weapon_suffix_buf_[161] = "";
     char auction_rune_buf_[161] = "";
     char auction_insignia_buf_[161] = "";
+    char auction_other_currency_buf_[161] = "";
     int auction_type_idx_ = 0;
     int auction_equipment_type_idx_ = 0;
+    int auction_currency_idx_ = 0;
     int auction_quantity_ = 1;
     int auction_unit_price_ = 0;
     int auction_duration_hours_ = 24;

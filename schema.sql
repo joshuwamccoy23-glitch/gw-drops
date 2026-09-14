@@ -48,6 +48,8 @@ CREATE TABLE IF NOT EXISTS auction_listings (
     item_model_id INTEGER NOT NULL,
     quantity INTEGER NOT NULL,
     unit_price INTEGER NOT NULL,
+    currency_type TEXT NOT NULL DEFAULT 'gold' CHECK (currency_type IN ('gold', 'platinum', 'armbrace', 'ectoplasm', 'other')),
+    currency_item TEXT NOT NULL DEFAULT '',
     notes TEXT NOT NULL,
     modifiers TEXT NOT NULL,
     created_at INTEGER NOT NULL,
