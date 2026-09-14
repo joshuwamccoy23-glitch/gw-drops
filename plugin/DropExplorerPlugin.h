@@ -15,7 +15,11 @@
 #include <GWCA/Utilities/Hook.h>
 #include <GWCA/Packets/StoC.h>
 
-namespace GW { struct Agent; }
+namespace GW {
+    struct Agent;
+    struct Item;
+    namespace UI::UIPacket { struct kMouseAction; }
+}
 
 class DropExplorerPlugin : public ToolboxUIPlugin {
 public:
@@ -157,13 +161,54 @@ private:
         std::vector<VendorPriceRecord> prices;
     };
 
+    struct AuctionListing {
+        std::string listing_id;
+        std::string seller_name;
+        std::string listing_type;
+        std::string item_name;
+        uint32_t item_model_id = 0;
+        uint32_t quantity = 1;
+        uint32_t unit_price = 0;
+        std::string notes;
+        std::string modifiers;
+        uint64_t created_at = 0;
+        uint64_t expires_at = 0;
+    };
+
+    struct AuctionListingsDocument {
+        uint32_t schema_version = 0;
+        std::string generated_at;
+        std::vector<AuctionListing> listings;
+    };
+
+    struct AuctionListingRequest {
+        std::string install_id;
+        std::string seller_name;
+        std::string listing_type;
+        std::string item_name;
+        uint32_t item_model_id = 0;
+        uint32_t quantity = 1;
+        uint32_t unit_price = 0;
+        std::string notes;
+        std::string modifiers;
+        uint32_t duration_hours = 24;
+    };
+
+    enum class AuctionRequestKind : uint8_t {
+        None,
+        Refresh,
+        Create,
+        Cancel
+    };
+
     void BuildItemIndex();
     void SortItemIndex();
     void LoadExternalDatabase(const std::filesystem::path& path);
     void DrawZoneExplorerView();
     void DrawItemSearchView();
-    void DrawInfoView();
+    void DrawAuctionHouseView();
     void TrackMob(const DropExplorer::ZoneInfo& zone, const DropExplorer::MobInfo& mob, bool travel);
+    bool RefreshTrackedMobMarker();
     std::string GetResolvedAgentName(uint32_t agent_id, const GW::Agent* agent);
     void UpdateDropTelemetry(float delta);
     void ResetDropTelemetry();
@@ -173,6 +218,13 @@ private:
     void StartVendorPricesDownload();
     void UpdateVendorPricesDownload();
     void ApplyVendorPrices(const VendorPricesDocument& document);
+    void RefreshAuctionListings();
+    void CreateAuctionListing();
+    void CancelAuctionListing(const std::string& listing_id);
+    void UpdateAuctionRequest(float delta);
+    std::string GetServiceBaseUrl() const;
+    void OnInventoryItemClick(GW::HookStatus* status, GW::UI::UIPacket::kMouseAction* action, GW::Item* item);
+    void PrefillAuctionItem(const GW::Item* item);
     void TriggerBatchUpload();
     void DrawItemTooltip(const std::string& name,
                          const std::string& category,
@@ -208,6 +260,9 @@ private:
     bool tracked_marker_set_ = false;
     float tracked_marker_x_ = 0.0f;
     float tracked_marker_y_ = 0.0f;
+    uint32_t navigation_target_map_id_ = 0;
+    float navigation_refresh_timer_ = 0.0f;
+    std::string navigation_status_;
 
     std::unordered_map<uint32_t, ObservedMob> observed_mobs_;
     std::unordered_map<uint32_t, ObservedItem> observed_items_;
@@ -224,7 +279,7 @@ private:
     bool rates_request_started_ = false;
     bool vendor_prices_request_started_ = false;
     std::string telemetry_install_id_;
-    char telemetry_endpoint_[256] = "https://escape-championship-screening-international.trycloudflare.com/v1/telemetry";
+    char telemetry_endpoint_[256] = "";
     char github_base_url_[256] = "https://raw.githubusercontent.com/joshuwamccoy23-glitch/gw-drops/main";
 
     float batch_interval_minutes_ = 5.0f;
@@ -233,6 +288,7 @@ private:
     std::vector<TelemetryVendorEvent> vendor_upload_queue_;
     size_t vendor_inflight_count_ = 0;
     std::unique_ptr<AsyncRestClient> vendor_prices_client_;
+    std::unique_ptr<AsyncRestClient> auction_client_;
     std::unordered_map<uint32_t, std::vector<VendorPriceRecord>> vendor_prices_by_model_id_;
     std::unordered_map<std::string, std::vector<VendorPriceRecord>> vendor_prices_by_name_;
     TelemetryVendorEvent last_quoted_event_;
@@ -245,6 +301,26 @@ private:
 
     std::string last_upload_status_ = "None";
     std::string last_sync_status_ = "None";
+    std::vector<AuctionListing> auction_listings_;
+    AuctionRequestKind auction_request_kind_ = AuctionRequestKind::None;
+    float auction_refresh_timer_ = 60.0f;
+    std::string auction_status_ = "Not synced";
+    char auction_search_buf_[128] = "";
+    char auction_item_buf_[160] = "";
+    char auction_notes_buf_[241] = "";
+    char auction_modifiers_buf_[1001] = "";
+    int auction_type_idx_ = 0;
+    int auction_quantity_ = 1;
+    int auction_unit_price_ = 0;
+    int auction_duration_hours_ = 24;
+    bool auction_publish_name_confirmed_ = false;
+    bool auction_focus_requested_ = false;
+    bool auction_context_prompt_ = false;
+    uint32_t auction_item_model_id_ = 0;
+    uint32_t auction_context_item_id_ = 0;
+    std::unique_ptr<PluginUtils::EncString> auction_item_name_decoder_;
+    std::unique_ptr<PluginUtils::EncString> auction_item_details_decoder_;
+    GW::HookEntry auction_item_click_entry_;
 
     // UI state
     int current_tab_ = 0;

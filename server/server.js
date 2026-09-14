@@ -4,6 +4,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { DatabaseSync } from "node:sqlite";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 import { wilson, confidenceLabel } from "../collector/statistics.js";
@@ -13,8 +14,8 @@ const execFileAsync = promisify(execFile);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, "..");
-const DATA_DIR = path.join(ROOT_DIR, "data");
-const DB_PATH = path.join(DATA_DIR, "drops.db");
+const DB_PATH = process.env.DB_PATH || path.join(ROOT_DIR, "data", "drops.db");
+const DATA_DIR = path.dirname(DB_PATH);
 
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -34,8 +35,10 @@ if (fs.existsSync(schemaPath)) {
 
 const PORT = parseInt(process.env.PORT || "8787", 10);
 const HOST = process.env.HOST || "0.0.0.0";
-const AUTO_PUSH = process.env.AUTO_GIT_PUSH !== "false";
+const AUTO_PUSH = process.env.AUTO_GIT_PUSH === "true";
 const PUBLISH_INTERVAL_MINUTES = parseInt(process.env.PUBLISH_INTERVAL_MINUTES || "60", 10);
+const MAX_REQUEST_BYTES = 1024 * 1024;
+const MAX_KILLS_PER_MINUTE = 500;
 
 console.log(`[GW-Drops Server] Initialized database at ${DB_PATH}`);
 
@@ -56,7 +59,7 @@ function parseJsonBody(req) {
     let raw = "";
     req.on("data", chunk => {
       raw += chunk;
-      if (raw.length > 10 * 1024 * 1024) { // 10MB safety cap
+      if (raw.length > MAX_REQUEST_BYTES) {
         req.destroy();
         reject(new Error("Payload too large"));
       }
@@ -89,6 +92,12 @@ async function handleIngest(req, res) {
   const now = Math.floor(Date.now() / 1000);
   const events = Array.isArray(body.events) ? body.events : [];
   const vendorEvents = Array.isArray(body.vendor_events) ? body.vendor_events : [];
+  const recentCount = db.prepare(
+    "SELECT COUNT(*) AS count FROM kill_events WHERE install_id = ? AND received_at >= ?"
+  ).get(body.install_id, now - 60)?.count || 0;
+  if (recentCount + events.length > MAX_KILLS_PER_MINUTE) {
+    return jsonResponse(res, { error: "Rate limit exceeded" }, 429);
+  }
 
   const insertKillStmt = db.prepare(
     "INSERT OR IGNORE INTO kill_events (event_id, install_id, observed_at, received_at, map_id, hard_mode, party_size, mob_model_id, mob_name, confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
@@ -105,7 +114,7 @@ async function handleIngest(req, res) {
   let vendorAccepted = 0;
 
   for (const ev of events) {
-    insertKillStmt.run(
+    const insertedKill = insertKillStmt.run(
       ev.event_id,
       body.install_id,
       ev.observed_at,
@@ -117,22 +126,22 @@ async function handleIngest(req, res) {
       ev.mob_name,
       ev.confidence
     );
-    killsAccepted++;
+    killsAccepted += insertedKill.changes;
 
     for (const drop of (ev.drops || [])) {
-      insertDropStmt.run(
+      const insertedDrop = insertDropStmt.run(
         ev.event_id,
         drop.item_model_id,
         drop.item_name,
         drop.item_type || 0,
         drop.rarity || 0
       );
-      dropsAccepted++;
+      dropsAccepted += insertedDrop.changes;
     }
   }
 
   for (const v of vendorEvents) {
-    insertVendorStmt.run(
+    const insertedVendor = insertVendorStmt.run(
       v.transaction_id,
       body.install_id,
       v.observed_at,
@@ -145,7 +154,7 @@ async function handleIngest(req, res) {
       v.unit_price,
       v.quantity
     );
-    vendorAccepted++;
+    vendorAccepted += insertedVendor.changes;
   }
 
   console.log(`[GW-Drops Ingest] Accepted from ${body.install_id}: ${killsAccepted} kills, ${dropsAccepted} drops, ${vendorAccepted} vendor records.`);
@@ -229,7 +238,7 @@ export function computeVendorPrices() {
 // Export Aggregated JSON Files and Push to GitHub
 export async function exportAndPublishToGitHub() {
   console.log("[GW-Drops] Starting aggregation and export...");
-  const ratesDoc = computeDropRates(1000, 10);
+  const ratesDoc = computeDropRates(1000, 100);
   const ratesFile = path.join(DATA_DIR, "community-rates.json");
   fs.writeFileSync(ratesFile, JSON.stringify(ratesDoc, null, 2), "utf8");
 
@@ -267,6 +276,73 @@ export async function exportAndPublishToGitHub() {
     console.warn("[GW-Drops] Git push failed (may need credentials or already up to date):", gitErr.message);
     return { success: false, error: gitErr.message };
   }
+}
+
+function activeListings(res, parsedUrl) {
+  const now = Math.floor(Date.now() / 1000);
+  const search = (parsedUrl.searchParams.get("search") || "").trim().slice(0, 80);
+  const listingType = parsedUrl.searchParams.get("type");
+  const typeFilter = listingType === "buy" || listingType === "sell" ? listingType : null;
+  const limit = Math.min(200, Math.max(1, parseInt(parsedUrl.searchParams.get("limit") || "100", 10)));
+  const rows = db.prepare(`
+    SELECT listing_id, seller_name, listing_type, item_name, item_model_id, quantity, unit_price, notes, modifiers, created_at, expires_at
+    FROM auction_listings
+    WHERE status = 'active' AND expires_at > ? AND (? = '' OR item_name LIKE ?)
+      AND (? IS NULL OR listing_type = ?)
+    ORDER BY created_at DESC LIMIT ?
+  `).all(now, search, `%${search}%`, typeFilter, typeFilter, limit);
+  return jsonResponse(res, { schema_version: 1, generated_at: new Date().toISOString(), listings: rows });
+}
+
+async function createListing(req, res) {
+  let body;
+  try {
+    body = await parseJsonBody(req);
+  } catch {
+    return jsonResponse(res, { error: "Invalid JSON" }, 400);
+  }
+  const validId = typeof body.install_id === "string" && /^[a-f0-9-]{16,64}$/i.test(body.install_id);
+  const validName = typeof body.seller_name === "string" && body.seller_name.trim().length >= 3 && body.seller_name.trim().length <= 20;
+  const validItem = typeof body.item_name === "string" && body.item_name.trim().length >= 1 && body.item_name.trim().length <= 160;
+  const validType = body.listing_type === "sell" || body.listing_type === "buy";
+  const validQuantity = Number.isInteger(body.quantity) && body.quantity >= 1 && body.quantity <= 250;
+  const validPrice = Number.isInteger(body.unit_price) && body.unit_price >= 0 && body.unit_price <= 100000000;
+  const notes = typeof body.notes === "string" ? body.notes.trim().slice(0, 240) : "";
+  const modifiers = typeof body.modifiers === "string" ? body.modifiers.trim().slice(0, 1000) : "";
+  const durationHours = Number.isInteger(body.duration_hours) ? Math.min(168, Math.max(1, body.duration_hours)) : 24;
+  if (!validId || !validName || !validItem || !validType || !validQuantity || !validPrice) {
+    return jsonResponse(res, { error: "Invalid listing" }, 400);
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const recent = db.prepare(
+    "SELECT COUNT(*) AS count FROM auction_listings WHERE seller_install_id = ? AND created_at >= ?"
+  ).get(body.install_id, now - 3600)?.count || 0;
+  if (recent >= 20) return jsonResponse(res, { error: "Listing limit exceeded" }, 429);
+  const listingId = randomUUID();
+  db.prepare(`
+    INSERT INTO auction_listings
+      (listing_id, seller_install_id, seller_name, listing_type, item_name, item_model_id, quantity, unit_price, notes, modifiers, created_at, expires_at, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+  `).run(listingId, body.install_id, body.seller_name.trim(), body.listing_type, body.item_name.trim(),
+    Number.isInteger(body.item_model_id) ? body.item_model_id : 0, body.quantity, body.unit_price, notes, modifiers,
+    now, now + durationHours * 3600);
+  return jsonResponse(res, { status: "ok", listing_id: listingId }, 201);
+}
+
+async function cancelListing(req, res, listingId) {
+  let body;
+  try {
+    body = await parseJsonBody(req);
+  } catch {
+    return jsonResponse(res, { error: "Invalid JSON" }, 400);
+  }
+  if (typeof body.install_id !== "string" || !/^[a-f0-9-]{16,64}$/i.test(body.install_id)) {
+    return jsonResponse(res, { error: "Invalid owner" }, 400);
+  }
+  const result = db.prepare(
+    "UPDATE auction_listings SET status = 'cancelled' WHERE listing_id = ? AND seller_install_id = ? AND status = 'active'"
+  ).run(listingId, body.install_id);
+  return result.changes ? jsonResponse(res, { status: "ok" }) : jsonResponse(res, { error: "Listing not found" }, 404);
 }
 
 // Create HTTP Server
@@ -316,7 +392,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && pathname === "/v1/recent") {
     const limit = Math.min(100, parseInt(parsedUrl.searchParams.get("limit") || "25", 10));
     const recentKills = db.prepare(
-      "SELECT event_id, install_id, observed_at, map_id, hard_mode, mob_model_id, mob_name, confidence FROM kill_events ORDER BY observed_at DESC, event_id DESC LIMIT ?"
+      "SELECT event_id, observed_at, map_id, hard_mode, mob_model_id, mob_name, confidence FROM kill_events ORDER BY observed_at DESC, event_id DESC LIMIT ?"
     ).all(limit);
 
     const getDrops = db.prepare("SELECT item_model_id, item_name, item_type, rarity FROM event_drops WHERE event_id = ?");
@@ -330,17 +406,25 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === "GET" && pathname === "/v1/rates") {
     const windowParam = parseInt(parsedUrl.searchParams.get("window") || "1000", 10);
-    const minParam = parseInt(parsedUrl.searchParams.get("min_samples") || "10", 10);
-    return jsonResponse(res, computeDropRates(windowParam, minParam));
+    const minParam = Math.max(100, parseInt(parsedUrl.searchParams.get("min_samples") || "100", 10));
+    return jsonResponse(res, computeDropRates(Math.min(10000, Math.max(100, windowParam)), minParam));
   }
 
   if (req.method === "GET" && pathname === "/v1/prices") {
     return jsonResponse(res, computeVendorPrices());
   }
 
-  if (req.method === "POST" && pathname === "/v1/publish") {
-    const result = await exportAndPublishToGitHub();
-    return jsonResponse(res, result);
+  if (req.method === "GET" && pathname === "/v1/listings") {
+    return activeListings(res, parsedUrl);
+  }
+
+  if (req.method === "POST" && pathname === "/v1/listings") {
+    return createListing(req, res);
+  }
+
+  const listingMatch = pathname.match(/^\/v1\/listings\/([a-f0-9-]{36})$/i);
+  if (req.method === "DELETE" && listingMatch) {
+    return cancelListing(req, res, listingMatch[1]);
   }
 
   if (req.method === "GET" && pathname === "/health") {

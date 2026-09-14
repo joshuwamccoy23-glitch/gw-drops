@@ -408,10 +408,6 @@
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
           Refresh
         </button>
-        <button id="publishBtn" class="btn btn-primary" onclick="publishNow()">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-          Commit & Push GitHub
-        </button>
       </div>
     </header>
 
@@ -421,7 +417,7 @@
         <div class="tunnel-icon">SSL</div>
         <div>
           <div style="font-size:0.75rem; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Cloudflare Public Endpoint (Active)</div>
-          <span id="tunnelUrl" class="tunnel-url">https://escape-championship-screening-international.trycloudflare.com/v1/telemetry</span>
+          <span id="tunnelUrl" class="tunnel-url"></span>
         </div>
       </div>
       <div style="font-size:0.8rem; color:var(--text-muted);">
@@ -552,6 +548,12 @@
       return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     }
 
+    function escapeHtml(value) {
+      return String(value ?? '').replace(/[&<>"']/g, char => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'
+      })[char]);
+    }
+
     async function fetchData() {
       try {
         const [statsRes, ratesRes, pricesRes, feedRes] = await Promise.all([
@@ -573,17 +575,17 @@
         } else {
           feedBody.innerHTML = feedRes.recent_kills.map(k => {
             const dropBadges = (k.drops && k.drops.length > 0)
-              ? k.drops.map(d => `<span style="color:#60a5fa; font-weight:600;">${d.item_name}</span>`).join(', ')
+              ? k.drops.map(d => `<span style="color:#60a5fa; font-weight:600;">${escapeHtml(d.item_name)}</span>`).join(', ')
               : '<span style="color:var(--text-muted);">None</span>';
             return `
               <tr>
                 <td class="mono">${formatDate(k.observed_at)}</td>
                 <td>Map ${k.map_id}</td>
                 <td><span class="badge ${k.hard_mode ? 'badge-hm' : 'badge-nm'}">${k.hard_mode ? 'HM' : 'NM'}</span></td>
-                <td><strong>${k.mob_name}</strong> <span class="mono" style="color:var(--text-muted); font-size:0.75rem;">(#${k.mob_model_id})</span></td>
+                <td><strong>${escapeHtml(k.mob_name)}</strong> <span class="mono" style="color:var(--text-muted); font-size:0.75rem;">(#${Number(k.mob_model_id) || 0})</span></td>
                 <td>${dropBadges}</td>
-                <td><span class="badge ${k.confidence === 'confirmed' ? 'badge-high' : 'badge-med'}">${k.confidence}</span></td>
-                <td class="mono" style="color:var(--text-muted); font-size:0.75rem;">${k.install_id.substring(0, 8)}...</td>
+                <td><span class="badge ${k.confidence === 'confirmed' ? 'badge-high' : 'badge-med'}">${escapeHtml(k.confidence)}</span></td>
+                <td class="mono" style="color:var(--text-muted); font-size:0.75rem;">Anonymous</td>
               </tr>
             `;
           }).join('');
@@ -596,14 +598,14 @@
         } else {
           ratesBody.innerHTML = ratesRes.records.map(r => `
             <tr>
-              <td><strong style="color:#60a5fa;">${r.item_name}</strong></td>
-              <td>${r.mob_name}</td>
+              <td><strong style="color:#60a5fa;">${escapeHtml(r.item_name)}</strong></td>
+              <td>${escapeHtml(r.mob_name)}</td>
               <td>Map ${r.map_id} <span class="badge ${r.hard_mode ? 'badge-hm' : 'badge-nm'}">${r.hard_mode ? 'HM' : 'NM'}</span></td>
               <td>${r.eligible_kills.toLocaleString()}</td>
               <td>${r.confirmed_drops.toLocaleString()}</td>
               <td><strong style="color:#10b981;">${r.rate_pct.toFixed(3)}%</strong></td>
               <td class="mono" style="color:var(--text-muted);">${r.confidence_low_pct.toFixed(3)}% – ${r.confidence_high_pct.toFixed(3)}%</td>
-              <td><span class="badge badge-high">${r.confidence}</span></td>
+              <td><span class="badge badge-high">${escapeHtml(r.confidence)}</span></td>
             </tr>
           `).join('');
         }
@@ -615,9 +617,9 @@
         } else {
           pricesBody.innerHTML = pricesRes.prices.map(p => `
             <tr>
-              <td><strong>${p.item_name}</strong></td>
-              <td><span style="color:#c084fc;">${p.vendor_type}</span></td>
-              <td><span class="badge badge-nm">${p.transaction_type}</span></td>
+              <td><strong>${escapeHtml(p.item_name)}</strong></td>
+              <td><span style="color:#c084fc;">${escapeHtml(p.vendor_type)}</span></td>
+              <td><span class="badge badge-nm">${escapeHtml(p.transaction_type)}</span></td>
               <td>${p.sample_count}</td>
               <td class="price-value">${p.avg_price} g</td>
               <td class="mono">${p.min_price} g / ${p.max_price} g</td>
@@ -630,23 +632,7 @@
       }
     }
 
-    async function publishNow() {
-      const btn = document.getElementById('publishBtn');
-      btn.disabled = true;
-      btn.innerHTML = 'Publishing...';
-      try {
-        const res = await fetch('/v1/publish', { method: 'POST' });
-        const data = await res.json();
-        showToast(data.success ? 'Published & pushed to GitHub!' : ('Publish: ' + (data.message || 'Done')));
-        fetchData();
-      } catch (e) {
-        showToast('Error publishing: ' + e.message);
-      } finally {
-        btn.disabled = false;
-        btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> Commit & Push GitHub`;
-      }
-    }
-
+    document.getElementById('tunnelUrl').textContent = `${window.location.origin}/v1/telemetry`;
     fetchData();
     setInterval(fetchData, 4000); // Live poll every 4 seconds
   </script>

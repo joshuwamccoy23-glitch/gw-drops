@@ -6,7 +6,7 @@ echo ===================================================================
 echo             GW-Drops Telemetry Network Launcher
 echo ===================================================================
 echo 1. Starting GW-Drops Ingestion Server on port 8787...
-start "GW-Drops Server" /min node server/server.js
+start "GW-Drops Server" /min cmd /c "set AUTO_GIT_PUSH=true&& node server/server.js"
 
 timeout /t 2 /nobreak >nul
 

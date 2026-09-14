@@ -7,10 +7,13 @@
 #include <GWCA/Managers/AgentMgr.h>
 #include <GWCA/Managers/ItemMgr.h>
 #include <GWCA/Managers/PartyMgr.h>
+#include <GWCA/Managers/PlayerMgr.h>
+#include <GWCA/Managers/ChatMgr.h>
 #include <GWCA/GameEntities/Agent.h>
 #include <GWCA/GameEntities/Item.h>
 #include <GWCA/GameEntities/Party.h>
 #include <GWCA/Constants/Constants.h>
+#include <GWCA/Constants/UIMessages.h>
 #include <Utils/GuiUtils.h>
 #include <Utils/TextUtils.h>
 #include <Utils/ToolboxUtils.h>
@@ -131,12 +134,16 @@ void DropExplorerPlugin::Initialize(ImGuiContext* ctx, const ImGuiAllocFns alloc
     telemetry_client_ = std::make_unique<AsyncRestClient>();
     rates_client_ = std::make_unique<AsyncRestClient>();
     vendor_prices_client_ = std::make_unique<AsyncRestClient>();
+    auction_client_ = std::make_unique<AsyncRestClient>();
 
     GW::StoC::RegisterPacketCallback<GW::Packet::StoC::QuotedItemPrice>(&price_quote_entry_, [this](GW::HookStatus*, const GW::Packet::StoC::QuotedItemPrice* packet) {
         OnPriceQuote(packet);
     });
     GW::StoC::RegisterPacketCallback<GW::Packet::StoC::TransactionDone>(&trans_done_entry_, [this](GW::HookStatus*, const GW::Packet::StoC::TransactionDone* packet) {
         OnTransactionDone(packet);
+    });
+    GW::Items::RegisterItemClickCallback(&auction_item_click_entry_, [this](GW::HookStatus* status, GW::UI::UIPacket::kMouseAction* action, GW::Item* item) {
+        OnInventoryItemClick(status, action, item);
     });
 
     if (toolbox_dll) {
@@ -155,12 +162,15 @@ void DropExplorerPlugin::Terminate()
 {
     GW::StoC::RemoveCallback<GW::Packet::StoC::QuotedItemPrice>(&price_quote_entry_);
     GW::StoC::RemoveCallback<GW::Packet::StoC::TransactionDone>(&trans_done_entry_);
+    GW::Items::RemoveItemClickCallback(&auction_item_click_entry_);
     if (telemetry_client_ && telemetry_client_->IsPending()) telemetry_client_->Abort();
     if (rates_client_ && rates_client_->IsPending()) rates_client_->Abort();
     if (vendor_prices_client_ && vendor_prices_client_->IsPending()) vendor_prices_client_->Abort();
+    if (auction_client_ && auction_client_->IsPending()) auction_client_->Abort();
     telemetry_client_.reset();
     rates_client_.reset();
     vendor_prices_client_.reset();
+    auction_client_.reset();
     ShutdownAsyncRest();
     agent_names_cache_.clear();
     ToolboxUIPlugin::Terminate();
@@ -185,22 +195,35 @@ void DropExplorerPlugin::Update(const float delta)
     UpdateCommunityRatesDownload();
     UpdateVendorPricesDownload();
     UpdateDropTelemetry(delta);
+    UpdateAuctionRequest(delta);
+
+    navigation_refresh_timer_ += delta;
+    if (navigation_target_map_id_ && navigation_refresh_timer_ >= 2.0f && GW::Map::GetIsMapLoaded() &&
+        static_cast<uint32_t>(GW::Map::GetMapID()) != navigation_target_map_id_) {
+        navigation_refresh_timer_ = 0.0f;
+        if (set_travel_dest_fn_) set_travel_dest_fn_(navigation_target_map_id_);
+    }
     if (tracked_mob_name_.empty()) return;
     tracking_scan_timer_ += delta;
     if (tracking_scan_timer_ < 0.25f) return;
     tracking_scan_timer_ = 0.0f;
+    RefreshTrackedMobMarker();
+}
+
+bool DropExplorerPlugin::RefreshTrackedMobMarker()
+{
     tracked_mob_visible_ = false;
     tracked_agent_id_ = 0;
 
     if (!GW::Map::GetIsMapLoaded() ||
         GW::Map::GetInstanceType() != GW::Constants::InstanceType::Explorable ||
         static_cast<uint32_t>(GW::Map::GetMapID()) != tracked_map_id_) {
-        return;
+        return false;
     }
 
     const auto* player = GW::Agents::GetControlledCharacter();
     const auto* agents = GW::Agents::GetAgentArray();
-    if (!player || !agents) return;
+    if (!player || !agents) return false;
 
     const GW::Agent* closest = nullptr;
     auto closest_distance_sq = std::numeric_limits<float>::max();
@@ -217,7 +240,7 @@ void DropExplorerPlugin::Update(const float delta)
         closest_distance_sq = distance_sq;
     }
 
-    if (!closest) return;
+    if (!closest) return false;
     tracked_mob_visible_ = true;
     tracked_agent_id_ = closest->agent_id;
     const auto marker_dx = closest->pos.x - tracked_marker_x_;
@@ -231,6 +254,8 @@ void DropExplorerPlugin::Update(const float delta)
         tracked_marker_set_ = true;
         GW::GameThread::Enqueue([set_custom_point, x, y] { set_custom_point(x, y); });
     }
+    navigation_status_ = std::format("Tracking {} at {:.0f}, {:.0f}", tracked_mob_name_, closest->pos.x, closest->pos.y);
+    return true;
 }
 
 void DropExplorerPlugin::LoadSettings(const wchar_t* folder)
@@ -242,11 +267,7 @@ void DropExplorerPlugin::LoadSettings(const wchar_t* folder)
     LoadSetting("telemetry_install_id", telemetry_install_id_);
     auto endpoint = std::string{};
     LoadSetting("telemetry_endpoint", endpoint);
-    if (!endpoint.empty() && endpoint.find("173.189.220.88") == std::string::npos) {
-        PluginUtils::StrCopy(telemetry_endpoint_, endpoint.c_str(), IM_ARRAYSIZE(telemetry_endpoint_));
-    } else {
-        PluginUtils::StrCopy(telemetry_endpoint_, "https://escape-championship-screening-international.trycloudflare.com/v1/telemetry", IM_ARRAYSIZE(telemetry_endpoint_));
-    }
+    PluginUtils::StrCopy(telemetry_endpoint_, endpoint.c_str(), IM_ARRAYSIZE(telemetry_endpoint_));
     LoadSetting("batch_interval_minutes", batch_interval_minutes_);
     if (batch_interval_minutes_ < 1.0f) batch_interval_minutes_ = 5.0f;
     auto gh_url = std::string{};
@@ -300,7 +321,8 @@ void DropExplorerPlugin::DrawSettings()
     }
     ImGui::TextWrapped("Opt-in telemetry buffers mob kills and vendor quotes/sales for 5-10 minutes, then sends all accumulated data in a single batch. No account, character, chat, or inventory scanning is sent.");
 
-    ImGui::TextDisabled("Aggregator: Official GW-Drops Network (Connected)");
+    ImGui::InputTextWithHint("Collector server", "https://your-stable-cloudflare-host", telemetry_endpoint_, IM_ARRAYSIZE(telemetry_endpoint_));
+    ImGui::TextDisabled("The same server provides telemetry and Auction House listings.");
     ImGui::SliderFloat("Batch Interval (minutes)##DropBatchInterval", &batch_interval_minutes_, 5.0f, 10.0f, "%.1f min");
 
     const float remaining_sec = std::max(0.0f, (batch_interval_minutes_ * 60.0f) - (batch_timer_ms_ / 1000.0f));
@@ -799,9 +821,16 @@ void DropExplorerPlugin::OpenWorldMap()
 void DropExplorerPlugin::ViewZone(const DropExplorer::ZoneInfo& zone)
 {
     SelectZoneByName(zone.name);
+    navigation_target_map_id_ = zone.map_id;
+    navigation_refresh_timer_ = 0.0f;
 
     if (set_travel_dest_fn_ && zone.map_id > 0) {
-        set_travel_dest_fn_(zone.map_id);
+        navigation_status_ = set_travel_dest_fn_(zone.map_id)
+            ? std::format("Waypoint set for {}", zone.name)
+            : std::format("Could not resolve a waypoint for {}", zone.name);
+    }
+    else {
+        navigation_status_ = "Travel waypoint support is unavailable in the loaded GWToolbox build";
     }
 
     OpenWorldMap();
@@ -809,16 +838,21 @@ void DropExplorerPlugin::ViewZone(const DropExplorer::ZoneInfo& zone)
 
 void DropExplorerPlugin::TravelToZone(const DropExplorer::ZoneInfo& zone)
 {
+    navigation_target_map_id_ = zone.map_id;
+    navigation_refresh_timer_ = 2.0f;
     if (set_travel_dest_fn_ && zone.map_id > 0) {
         set_travel_dest_fn_(zone.map_id);
     }
 
+    if (GW::Map::GetIsMapLoaded() && static_cast<uint32_t>(GW::Map::GetMapID()) == zone.map_id) {
+        navigation_status_ = std::format("Already in {}; tracking the selected source", zone.name);
+        return;
+    }
     const auto dest_id = (zone.nearest_outpost_id > 0) ? zone.nearest_outpost_id : zone.map_id;
     if (dest_id > 0) {
+        navigation_status_ = std::format("Travelling to {} for {}", zone.nearest_outpost_name, zone.name);
         GW::Map::Travel(static_cast<GW::Constants::MapID>(dest_id));
     }
-
-    OpenWorldMap();
 }
 
 void DropExplorerPlugin::TrackMob(const DropExplorer::ZoneInfo& zone, const DropExplorer::MobInfo& mob, const bool travel)
@@ -839,6 +873,11 @@ void DropExplorerPlugin::TrackMob(const DropExplorer::ZoneInfo& zone, const Drop
     tracked_mob_visible_ = false;
     tracked_marker_set_ = false;
     tracking_scan_timer_ = 0.25f;
+    navigation_target_map_id_ = zone.map_id;
+    if (RefreshTrackedMobMarker()) {
+        if (!travel) OpenWorldMap();
+        return;
+    }
     if (travel) TravelToZone(zone);
     else ViewZone(zone);
 }
@@ -964,9 +1003,11 @@ void DropExplorerPlugin::Draw(IDirect3DDevice9*)
             ImGui::EndTabItem();
         }
 
-        if (ImGui::BeginTabItem("Drop Rates & Guide")) {
+        const auto auction_flags = auction_focus_requested_ ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
+        if (ImGui::BeginTabItem("Auction House", nullptr, auction_flags)) {
+            auction_focus_requested_ = false;
             current_tab_ = 2;
-            DrawInfoView();
+            DrawAuctionHouseView();
             ImGui::EndTabItem();
         }
 
@@ -1067,6 +1108,9 @@ void DropExplorerPlugin::DrawZoneExplorerView()
         }
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Open World Map and set destination waypoint on %s", zone.name.c_str());
+        }
+        if (!navigation_status_.empty()) {
+            ImGui::TextColored(ImVec4(0.35f, 0.85f, 0.45f, 1.0f), "%s", navigation_status_.c_str());
         }
 
         ImGui::Separator();
@@ -1365,34 +1409,248 @@ void DropExplorerPlugin::DrawItemSearchView()
     }
 }
 
-void DropExplorerPlugin::DrawInfoView()
+std::string DropExplorerPlugin::GetServiceBaseUrl() const
 {
-    ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f), "Guild Wars 1 Drop Rates & Mechanics");
+    auto url = std::string(telemetry_endpoint_);
+    if (const auto api_path = url.find("/v1/"); api_path != std::string::npos) url.resize(api_path);
+    while (url.ends_with('/')) url.pop_back();
+    return url;
+}
+
+void DropExplorerPlugin::RefreshAuctionListings()
+{
+    if (!auction_client_ || auction_client_->IsPending()) return;
+    const auto base = GetServiceBaseUrl();
+    if (base.empty()) {
+        auction_status_ = "Collector server URL is not configured";
+        return;
+    }
+    auction_client_->Clear();
+    auction_client_->SetUrl((base + "/v1/listings?limit=200").c_str());
+    auction_client_->SetUserAgent("GWToolbox-DropExplorer/1.0");
+    auction_client_->SetConnectTimeoutSec(5);
+    auction_client_->SetTimeoutSec(10);
+    auction_client_->ExecuteAsync();
+    auction_request_kind_ = AuctionRequestKind::Refresh;
+    auction_status_ = "Loading listings...";
+}
+
+void DropExplorerPlugin::CreateAuctionListing()
+{
+    if (!auction_client_ || auction_client_->IsPending()) return;
+    const auto base = GetServiceBaseUrl();
+    const auto* player_name = GW::PlayerMgr::GetPlayerName();
+    if (base.empty() || !player_name || !*player_name || !auction_item_buf_[0] || !auction_publish_name_confirmed_) {
+        auction_status_ = "Item, server connection, character name, and publishing confirmation are required";
+        return;
+    }
+    AuctionListingRequest request;
+    request.install_id = telemetry_install_id_;
+    request.seller_name = PluginUtils::WStringToString(player_name);
+    request.listing_type = auction_type_idx_ == 0 ? "sell" : "buy";
+    request.item_name = auction_item_buf_;
+    request.item_model_id = auction_item_model_id_;
+    request.quantity = static_cast<uint32_t>(std::max(1, auction_quantity_));
+    request.unit_price = static_cast<uint32_t>(std::max(0, auction_unit_price_));
+    request.notes = auction_notes_buf_;
+    request.modifiers = auction_modifiers_buf_;
+    request.duration_hours = static_cast<uint32_t>(std::clamp(auction_duration_hours_, 1, 168));
+    const auto payload = glz::write_json(request).value_or(std::string{});
+    if (payload.empty()) {
+        auction_status_ = "Could not encode listing";
+        return;
+    }
+    auction_client_->Clear();
+    auction_client_->SetUrl((base + "/v1/listings").c_str());
+    auction_client_->SetMethod(HttpMethod::Post);
+    auction_client_->SetHeader("Content-Type", "application/json");
+    auction_client_->SetPostContent(payload, ContentFlag::Copy);
+    auction_client_->SetConnectTimeoutSec(5);
+    auction_client_->SetTimeoutSec(10);
+    auction_client_->ExecuteAsync();
+    auction_request_kind_ = AuctionRequestKind::Create;
+    auction_status_ = "Publishing listing...";
+}
+
+void DropExplorerPlugin::CancelAuctionListing(const std::string& listing_id)
+{
+    if (!auction_client_ || auction_client_->IsPending()) return;
+    const auto base = GetServiceBaseUrl();
+    if (base.empty()) return;
+    const auto payload = std::format("{{\"install_id\":\"{}\"}}", telemetry_install_id_);
+    auction_client_->Clear();
+    auction_client_->SetUrl((base + "/v1/listings/" + listing_id).c_str());
+    auction_client_->SetMethod("DELETE");
+    auction_client_->SetHeader("Content-Type", "application/json");
+    auction_client_->SetPostContent(payload, ContentFlag::Copy);
+    auction_client_->SetConnectTimeoutSec(5);
+    auction_client_->SetTimeoutSec(10);
+    auction_client_->ExecuteAsync();
+    auction_request_kind_ = AuctionRequestKind::Cancel;
+    auction_status_ = "Cancelling listing...";
+}
+
+void DropExplorerPlugin::UpdateAuctionRequest(const float delta)
+{
+    auction_refresh_timer_ += delta;
+    if (auction_item_name_decoder_ && !auction_item_name_decoder_->IsDecoding()) {
+        const auto name = StripXmlTags(auction_item_name_decoder_->string());
+        if (!name.empty()) PluginUtils::StrCopy(auction_item_buf_, name.c_str(), IM_ARRAYSIZE(auction_item_buf_));
+        auction_item_name_decoder_.reset();
+    }
+    if (auction_item_details_decoder_ && !auction_item_details_decoder_->IsDecoding()) {
+        const auto details = StripXmlTags(auction_item_details_decoder_->string());
+        if (!details.empty()) PluginUtils::StrCopy(auction_modifiers_buf_, details.c_str(), IM_ARRAYSIZE(auction_modifiers_buf_));
+        auction_item_details_decoder_.reset();
+    }
+    if (auction_request_kind_ == AuctionRequestKind::None) {
+        if (auction_refresh_timer_ >= 60.0f) RefreshAuctionListings();
+        return;
+    }
+    if (!auction_client_ || !auction_client_->IsCompleted()) return;
+    const auto completed_kind = auction_request_kind_;
+    auction_request_kind_ = AuctionRequestKind::None;
+    const auto successful = auction_client_->IsSuccessful();
+    if (successful && completed_kind == AuctionRequestKind::Refresh) {
+        AuctionListingsDocument document;
+        if (!glz::read_json(document, auction_client_->GetContent()) && document.schema_version == 1) {
+            auction_listings_ = std::move(document.listings);
+            auction_status_ = std::format("{} active listings", auction_listings_.size());
+            auction_refresh_timer_ = 0.0f;
+        }
+        else {
+            auction_status_ = "Server returned an invalid listing document";
+        }
+    }
+    else if (successful && completed_kind == AuctionRequestKind::Create) {
+        auction_status_ = "Listing published";
+        auction_publish_name_confirmed_ = false;
+    }
+    else if (successful && completed_kind == AuctionRequestKind::Cancel) {
+        auction_status_ = "Listing cancelled";
+    }
+    else {
+        auction_status_ = std::format("Auction request failed (HTTP {})", auction_client_->GetStatusCode());
+    }
+    auction_client_->Clear();
+    if (successful && completed_kind != AuctionRequestKind::Refresh) RefreshAuctionListings();
+}
+
+void DropExplorerPlugin::PrefillAuctionItem(const GW::Item* item)
+{
+    if (!item) return;
+    auction_item_model_id_ = item->model_id;
+    auction_quantity_ = std::max<int>(1, item->quantity);
+    auction_type_idx_ = 0;
+    auction_item_buf_[0] = 0;
+    auction_modifiers_buf_[0] = 0;
+    auction_item_name_decoder_ = std::make_unique<PluginUtils::EncString>(
+        item->single_item_name && *item->single_item_name ? item->single_item_name : item->name_enc, true);
+    if (item->info_string && *item->info_string) {
+        auction_item_details_decoder_ = std::make_unique<PluginUtils::EncString>(item->info_string, true);
+    }
+    auction_focus_requested_ = true;
+    current_tab_ = 2;
+    if (const auto visible = GetVisiblePtr()) *visible = true;
+}
+
+void DropExplorerPlugin::OnInventoryItemClick(GW::HookStatus*, GW::UI::UIPacket::kMouseAction* action, GW::Item* item)
+{
+    if (!action || !item || action->current_state != static_cast<GW::UI::UIPacket::ActionState>(999u)) return;
+    auction_context_item_id_ = item->item_id;
+    PrefillAuctionItem(item);
+    auction_context_prompt_ = true;
+}
+
+void DropExplorerPlugin::DrawAuctionHouseView()
+{
+    if (auction_context_prompt_) {
+        ImGui::OpenPopup("Inventory Auction Action");
+        auction_context_prompt_ = false;
+    }
+    if (ImGui::BeginPopupModal("Inventory Auction Action", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextWrapped("List %s in the Auction House?", auction_item_buf_[0] ? auction_item_buf_ : "this inventory item");
+        if (ImGui::Button("List in Auction House")) ImGui::CloseCurrentPopup();
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) {
+            auction_item_buf_[0] = 0;
+            auction_modifiers_buf_[0] = 0;
+            auction_item_model_id_ = 0;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+    if (auction_refresh_timer_ >= 60.0f && auction_request_kind_ == AuctionRequestKind::None) RefreshAuctionListings();
+    ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f), "Player Auction House");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Refresh")) RefreshAuctionListings();
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", auction_status_.c_str());
+    ImGui::TextWrapped("Listings arrange player-to-player contact only. Clicking Contact sends an in-game whisper; the plugin never transfers items or currency.");
     ImGui::Separator();
 
-    ImGui::TextWrapped(
-        "In Guild Wars 1, mob drop tables and drop chances are calculated strictly on the game server. "
-        "The client only receives entity packets when items actually spawn in the world.\n\n"
-        "ArenaNet has not published exact per-item drop probabilities. Drop Explorer therefore labels a rate "
-        "Unknown unless the dataset includes a traceable published source. It does not estimate or invent rates."
-    );
+    const char* listing_types[] = {"Sell", "Buy Order"};
+    ImGui::Combo("Listing type", &auction_type_idx_, listing_types, IM_ARRAYSIZE(listing_types));
+    ImGui::InputTextWithHint("Item", "Type an item name or select a match below", auction_item_buf_, IM_ARRAYSIZE(auction_item_buf_));
+    if (auction_item_buf_[0]) {
+        auto shown = 0;
+        if (ImGui::BeginChild("##AuctionMatches", ImVec2(0.0f, ImGui::GetTextLineHeightWithSpacing() * 4.0f), true)) {
+            std::unordered_set<std::string> names;
+            for (const auto& item : item_index_) {
+                if (shown >= 40 || !CaseInsensitiveContains(item.item_name, auction_item_buf_) || !names.emplace(ToLower(item.item_name)).second) continue;
+                if (ImGui::Selectable(item.item_name.c_str())) {
+                    PluginUtils::StrCopy(auction_item_buf_, item.item_name.c_str(), IM_ARRAYSIZE(auction_item_buf_));
+                    auction_item_model_id_ = 0;
+                }
+                ++shown;
+            }
+        }
+        ImGui::EndChild();
+    }
+    ImGui::InputInt("Quantity", &auction_quantity_);
+    ImGui::InputInt("Unit price (gold)", &auction_unit_price_);
+    ImGui::InputInt("Duration (hours)", &auction_duration_hours_);
+    ImGui::InputTextMultiline("Inscriptions / runes / insignias / modifiers", auction_modifiers_buf_, IM_ARRAYSIZE(auction_modifiers_buf_), ImVec2(-1.0f, 58.0f));
+    ImGui::InputTextMultiline("Notes", auction_notes_buf_, IM_ARRAYSIZE(auction_notes_buf_), ImVec2(-1.0f, 42.0f));
+    ImGui::Checkbox("Publish my current character name so buyers/sellers can whisper me", &auction_publish_name_confirmed_);
+    if (!auction_publish_name_confirmed_) ImGui::BeginDisabled();
+    if (ImGui::Button("Publish Listing")) CreateAuctionListing();
+    if (!auction_publish_name_confirmed_) ImGui::EndDisabled();
 
-    ImGui::Spacing();
-    ImGui::Bullet();
-    ImGui::TextColored(GetRarityColor(DropExplorer::DropRarity::UniqueGreen), "Green unique items:");
-    ImGui::SameLine();
-    ImGui::TextWrapped("Their modifiers are fixed per named item, but low-requirement and other exceptions exist. Exact stats are shown from the item's Guild Wars Wiki page.");
-
-    ImGui::Bullet();
-    ImGui::TextColored(GetRarityColor(DropExplorer::DropRarity::Rare), "Ordinary loot:");
-    ImGui::SameLine();
-    ImGui::TextWrapped("Loot scaling, party size, area, foe, chest, difficulty, and anti-farm behavior can affect what drops. A rarity label is not a probability.");
-
-    ImGui::Spacing();
     ImGui::Separator();
-    ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Extensibility & Custom Datasets");
-    ImGui::TextWrapped(
-        "Place 'drops_database.json' in the GWToolboxpp plugin folder to replace the bundled catalog. "
-        "Unverified numeric rates are discarded on load. Source-backed item records can include a source_url field."
-    );
+    ImGui::InputTextWithHint("##AuctionSearch", "Filter active listings", auction_search_buf_, IM_ARRAYSIZE(auction_search_buf_));
+    const auto* own_name_w = GW::PlayerMgr::GetPlayerName();
+    const auto own_name = own_name_w ? PluginUtils::WStringToString(own_name_w) : std::string{};
+    if (ImGui::BeginTable("AuctionListings", 7, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable)) {
+        ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 55.0f);
+        ImGui::TableSetupColumn("Item");
+        ImGui::TableSetupColumn("Mods / Requirements");
+        ImGui::TableSetupColumn("Qty", ImGuiTableColumnFlags_WidthFixed, 40.0f);
+        ImGui::TableSetupColumn("Price", ImGuiTableColumnFlags_WidthFixed, 75.0f);
+        ImGui::TableSetupColumn("Player");
+        ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 75.0f);
+        ImGui::TableHeadersRow();
+        for (const auto& listing : auction_listings_) {
+            if (!CaseInsensitiveContains(listing.item_name, auction_search_buf_) && !CaseInsensitiveContains(listing.modifiers, auction_search_buf_)) continue;
+            ImGui::PushID(listing.listing_id.c_str());
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn(); ImGui::TextUnformatted(listing.listing_type == "sell" ? "SELL" : "BUY");
+            ImGui::TableNextColumn(); ImGui::TextWrapped("%s", listing.item_name.c_str());
+            ImGui::TableNextColumn(); ImGui::TextWrapped("%s", listing.modifiers.empty() ? listing.notes.c_str() : listing.modifiers.c_str());
+            ImGui::TableNextColumn(); ImGui::Text("%u", listing.quantity);
+            ImGui::TableNextColumn(); ImGui::Text("%u g", listing.unit_price);
+            ImGui::TableNextColumn(); ImGui::TextWrapped("%s", listing.seller_name.c_str());
+            ImGui::TableNextColumn();
+            if (listing.seller_name == own_name) {
+                if (ImGui::SmallButton("Cancel")) CancelAuctionListing(listing.listing_id);
+            }
+            else if (ImGui::SmallButton("Contact")) {
+                const auto message = std::format("Hi, I'm contacting you about your {} listing for {} ({} @ {}g).",
+                                                 listing.listing_type, listing.item_name, listing.quantity, listing.unit_price);
+                GW::Chat::SendChat(ToWString(listing.seller_name).c_str(), ToWString(message).c_str());
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
 }
