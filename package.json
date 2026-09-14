@@ -1,0 +1,15 @@
+{
+  "name": "gw-drops",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "deploy": "wrangler deploy",
+    "db:create": "wrangler d1 create gw-drops",
+    "db:migrate": "wrangler d1 execute gw-drops --remote --file schema.sql"
+  },
+  "devDependencies": {
+    "wrangler": "^4.37.1"
+  }
+}

@@ -1,0 +1,11 @@
+name = "gw-drops"
+main = "collector/index.js"
+compatibility_date = "2026-09-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "gw-drops"
+database_id = "REPLACE_AFTER_D1_CREATE"
+
+[vars]
+ALLOWED_ORIGIN = "*"
