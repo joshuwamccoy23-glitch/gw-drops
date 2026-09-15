@@ -12,6 +12,7 @@ let server;
 let tunnel;
 let desiredUrl = '';
 let publishedUrl = '';
+let publishFailures = 0;
 let checkout;
 const options = { windowsHide: true, timeout: 60000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }, stdio: ['ignore', 'pipe', 'pipe'] };
 
@@ -38,9 +39,22 @@ async function publish() {
     }
     git(['push', 'origin', 'HEAD:main']);
     publishedUrl = url;
+    publishFailures = 0;
     console.log(`Published server address: ${url}`);
   } catch (error) {
-    console.error(`Address publication failed; retrying in 15 seconds: ${error.message}`);
+    publishFailures++;
+    const details = [];
+    for (let current = error; current; current = current.cause) {
+      const detail = current.code ? `${current.message} (${current.code})` : current.message;
+      if (detail && !details.includes(detail)) details.push(detail);
+    }
+    console.error(`Address publication failed (${publishFailures}/4): ${details.join(': ')}`);
+    if (publishFailures >= 4 && desiredUrl === url && tunnel?.exitCode === null) {
+      console.error('The public tunnel did not become reachable; replacing it in 5 seconds.');
+      publishFailures = 0;
+      desiredUrl = '';
+      tunnel.kill();
+    }
   }
 }
 
@@ -53,6 +67,7 @@ function startTunnel() {
     const match = buffer.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
     if (match && desiredUrl !== match[0]) {
       desiredUrl = match[0];
+      publishFailures = 0;
       console.log(`Tunnel ready: ${desiredUrl}`);
     }
   };

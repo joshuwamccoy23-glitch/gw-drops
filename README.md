@@ -24,7 +24,7 @@ Crowdsourced drop observations, vendor pricing, map guidance, and player-to-play
 
 ## Quick Start (Running the Server)
 
-Use `start-network.bat` to run the local server with a Cloudflare Quick Tunnel and automatic recovery. The launcher restarts the tunnel if it exits, checks the local server every 15 seconds, and publishes the verified public address to `data/auction-droplistings.txt` in this repository. The host needs working Git push credentials. Publication uses a separate temporary checkout so unrelated local changes are not committed.
+Use `start-network.bat` to run the local server with a Cloudflare Quick Tunnel and automatic recovery. The launcher restarts the tunnel if it exits, replaces tunnel hostnames that fail public verification, checks the local server every 15 seconds, and publishes the verified public address to `data/auction-droplistings.txt` in this repository. The host needs working Git push credentials. Publication uses a separate temporary checkout so unrelated local changes are not committed.
 
 On this host, the `GW-Drops Auction Server` scheduled task starts the network launcher at Windows logon and restarts it if the launcher exits.
 
