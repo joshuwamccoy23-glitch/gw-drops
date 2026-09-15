@@ -302,14 +302,21 @@ function activeListings(res, parsedUrl) {
   const search = (parsedUrl.searchParams.get("search") || "").trim().slice(0, 80);
   const listingType = parsedUrl.searchParams.get("type");
   const typeFilter = listingType === "buy" || listingType === "sell" ? listingType : null;
+  const mine = parsedUrl.searchParams.get("mine") === "true";
+  const installId = (parsedUrl.searchParams.get("install_id") || "").trim();
+  if (mine && !/^[a-f0-9-]{16,64}$/i.test(installId)) {
+    return jsonResponse(res, { error: "Invalid owner" }, 400);
+  }
   const limit = Math.min(200, Math.max(1, parseInt(parsedUrl.searchParams.get("limit") || "100", 10)));
   const rows = db.prepare(`
-    SELECT listing_id, seller_name, listing_type, item_name, item_model_id, quantity, unit_price, currency_type, currency_item, notes, modifiers, created_at, expires_at
+    SELECT listing_id, seller_install_id, seller_name, listing_type, item_name, item_model_id, quantity, unit_price, currency_type, currency_item, notes, modifiers, created_at, expires_at
     FROM auction_listings
     WHERE status = 'active' AND expires_at > ? AND (? = '' OR item_name LIKE ?)
       AND (? IS NULL OR listing_type = ?)
+      AND (? = 0 OR seller_install_id = ?)
     ORDER BY created_at DESC LIMIT ?
-  `).all(now, search, `%${search}%`, typeFilter, typeFilter, limit);
+  `).all(now, search, `%${search}%`, typeFilter, typeFilter, mine ? 1 : 0, installId, limit);
+  for (const row of rows) delete row.seller_install_id;
   return jsonResponse(res, { schema_version: 2, generated_at: new Date().toISOString(), listings: rows });
 }
 
