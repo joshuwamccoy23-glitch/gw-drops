@@ -597,8 +597,8 @@ void DropExplorerPlugin::TriggerBatchUpload()
 
     auto endpoint = std::string(telemetry_endpoint_);
     while (endpoint.ends_with('/')) endpoint.pop_back();
-    if (!endpoint.ends_with("/v1/telemetry") && !endpoint.ends_with("/v1/events")) {
-        endpoint += "/v1/telemetry";
+    if (!endpoint.ends_with("/v1/mobdroptelemetry")) {
+        endpoint += "/v1/mobdroptelemetry";
     }
 
     telemetry_client_->Clear();

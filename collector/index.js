@@ -81,7 +81,7 @@ async function rates(request, env) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (request.method === "POST" && url.pathname === "/v1/events") return ingest(request, env);
+    if (request.method === "POST" && url.pathname === "/v1/mobdroptelemetry") return ingest(request, env);
     if (request.method === "GET" && url.pathname === "/v1/rates") return rates(request, env);
     if (request.method === "GET" && url.pathname === "/health") return json({ status: "ok" });
     return json({ error: "Not found" }, 404);

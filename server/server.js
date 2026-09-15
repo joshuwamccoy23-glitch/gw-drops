@@ -382,7 +382,7 @@ const server = http.createServer(async (req, res) => {
     return res.end();
   }
 
-  if (req.method === "POST" && (pathname === "/v1/telemetry" || pathname === "/v1/events")) {
+  if (req.method === "POST" && pathname === "/v1/mobdroptelemetry") {
     return handleIngest(req, res);
   }
 
@@ -459,7 +459,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`[GW-Drops Server] Running at http://${HOST}:${PORT}`);
-  console.log(`[GW-Drops Server] Telemetry ingest endpoint: POST http://${HOST}:${PORT}/v1/telemetry`);
+  console.log(`[GW-Drops Server] Mob/drop telemetry ingest endpoint: POST http://${HOST}:${PORT}/v1/mobdroptelemetry`);
   console.log(`[GW-Drops Server] Auto-publish to GitHub scheduled every ${PUBLISH_INTERVAL_MINUTES} minutes.`);
 
   // Initial export on boot

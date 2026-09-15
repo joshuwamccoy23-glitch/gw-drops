@@ -16,7 +16,7 @@ Crowdsourced drop observations, vendor pricing, map guidance, and player-to-play
 2. **Collector Server (`server/server.js`)**:
    - Runs locally or on a server (`start-server.bat`).
    - Built on Node.js with zero external dependencies using the native `node:sqlite` engine and WAL mode.
-   - Ingests batched telemetry at `POST /v1/telemetry`.
+   - Ingests batched mob/drop telemetry at `POST /v1/mobdroptelemetry`.
    - Serves listings at `GET/POST /v1/listings` and owner-authorized cancellation at `DELETE /v1/listings/:id`.
    - Aggregates mob drop rates with Wilson 95% confidence intervals and vendor prices (min, max, average, sample counts).
    - Periodically exports and pushes updated `data/community-rates.json` and `data/vendor-prices.json` to GitHub.
@@ -35,7 +35,7 @@ The instructions below describe the older manually configured client:
 1. Double-click `start-server.bat` (or run `npm start`).
 2. The server will start listening on port `8787` (`http://localhost:8787`).
 3. In GWToolbox++ under **Settings -> Drop Explorer**:
-   - Set **Collector server** to `http://localhost:8787` (or your stable Cloudflare hostname). A URL ending in `/v1/telemetry` is also accepted.
+   - Set **Collector server** to `http://localhost:8787` (or your stable Cloudflare hostname). A URL ending in `/v1/mobdroptelemetry` is also accepted.
    - Check **Contribute anonymous drop & vendor observations**.
    - Set **Batch Interval** (default 5.0 minutes).
 
