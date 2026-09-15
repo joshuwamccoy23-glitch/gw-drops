@@ -83,7 +83,16 @@ async function startServer() {
     if (response.ok && (await response.json()).schema_version === 2) return;
   } catch {}
   if (server && server.exitCode === null) return;
-  server = spawn(process.execPath, ['server/server.js'], { cwd: root, windowsHide: true, env: { ...process.env, AUTO_GIT_PUSH: 'false' }, stdio: ['ignore', 'inherit', 'inherit'] });
+  server = spawn(process.execPath, ['server/server.js'], {
+    cwd: root,
+    windowsHide: true,
+    env: {
+      ...process.env,
+      AUTO_GIT_PUSH: 'false',
+      DROP_LOG_PATH: process.env.DROP_LOG_PATH || 'C:/Jarvis/Jarvis/Projects/GWToolboxpp/drop_log.md'
+    },
+    stdio: ['ignore', 'inherit', 'inherit']
+  });
   server.on('error', error => console.error(error.message));
 }
 

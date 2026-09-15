@@ -16,6 +16,7 @@ const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, "..");
 const DB_PATH = process.env.DB_PATH || path.join(ROOT_DIR, "data", "drops.db");
 const DATA_DIR = path.dirname(DB_PATH);
+const DROP_LOG_PATH = process.env.DROP_LOG_PATH || "";
 
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -115,6 +116,7 @@ async function handleIngest(req, res) {
   let killsAccepted = 0;
   let dropsAccepted = 0;
   let vendorAccepted = 0;
+  const acceptedKills = [];
 
   for (const ev of events) {
     const insertedKill = insertKillStmt.run(
@@ -130,6 +132,7 @@ async function handleIngest(req, res) {
       ev.confidence
     );
     killsAccepted += insertedKill.changes;
+    if (insertedKill.changes) acceptedKills.push(ev);
 
     for (const drop of (ev.drops || [])) {
       const insertedDrop = insertDropStmt.run(
@@ -141,6 +144,19 @@ async function handleIngest(req, res) {
       );
       dropsAccepted += insertedDrop.changes;
     }
+  }
+
+  if (DROP_LOG_PATH && acceptedKills.length) {
+    fs.mkdirSync(path.dirname(DROP_LOG_PATH), { recursive: true });
+    if (!fs.existsSync(DROP_LOG_PATH)) {
+      fs.writeFileSync(DROP_LOG_PATH, "# Drop Log\n\nMob kills accepted by the GW-Drops server.\n\n");
+    }
+    const lines = acceptedKills.map(ev => {
+      const drops = Array.isArray(ev.drops) ? ev.drops : [];
+      const dropNames = drops.length ? drops.map(drop => `${drop.item_name} (${drop.item_model_id})`).join(", ") : "none";
+      return `- ${new Date(ev.observed_at * 1000).toISOString()} | map ${ev.map_id} | ${ev.hard_mode ? "HM" : "NM"} | mob: ${ev.mob_name} (${ev.mob_model_id}) | listed item dropped: ${drops.length ? "yes" : "no"} | detected drops: ${dropNames} | confidence: ${ev.confidence}`;
+    });
+    fs.appendFileSync(DROP_LOG_PATH, `${lines.join("\n")}\n`);
   }
 
   for (const v of vendorEvents) {
