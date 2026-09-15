@@ -11,14 +11,17 @@
 #include <GWCA/Managers/ChatMgr.h>
 #include <GWCA/GameEntities/Agent.h>
 #include <GWCA/GameEntities/Item.h>
+#include <GWCA/GameEntities/Map.h>
 #include <GWCA/GameEntities/Party.h>
 #include <GWCA/Constants/Constants.h>
 #include <GWCA/Constants/UIMessages.h>
+#include <Defines.h>
 #include <Utils/GuiUtils.h>
 #include <Utils/TextUtils.h>
 #include <Utils/ToolboxUtils.h>
 
 #include <glaze/glaze.hpp>
+#include <easywsclient.hpp>
 #include <imgui.h>
 #include <fstream>
 #include <algorithm>
@@ -27,8 +30,40 @@
 #include <random>
 #include <ctime>
 #include <format>
+#include <cmath>
+
+namespace TradeChatApi {
+    struct TradeChatRawMessage {
+        std::string s;
+        std::string m;
+        glz::raw_json t;
+    };
+
+    struct TradeChatEnvelope {
+        std::string query;
+        std::vector<TradeChatRawMessage> results;
+        std::string s;
+        std::string m;
+        glz::raw_json t;
+    };
+}
 
 namespace {
+    uint64_t ParseTradeChatTimestamp(std::string_view raw)
+    {
+        if (raw.empty()) return 0;
+        if (raw.front() == '"') {
+            std::string value;
+            if (glz::read_json(value, raw)) return 0;
+            return strtoull(value.c_str(), nullptr, 10) / 1000;
+        }
+        double value = 0.0;
+        if (glz::read_json(value, raw)) return 0;
+        return static_cast<uint64_t>(value) / 1000;
+    }
+
+    std::string FormatTimestamp(uint64_t ts);
+
     std::string ToLower(std::string_view s)
     {
         std::string res;
@@ -67,68 +102,61 @@ namespace {
         return output;
     }
 
-    const std::vector<std::string>& GetAuctionInscriptionOptions()
+    DropExplorerPlugin::LinkerRarity GetLinkerItemRarity(const GW::Item* item)
     {
-        static const std::vector<std::string> options = {
-            "None", "Aptitude not Attitude", "Be Just and Fear Not", "Brawn over Brains", "Cast Out the Unclean",
-            "Dance with Death", "Don't call it a comeback!", "Don't Fear the Reaper", "Don't Think Twice", "Down But Not Out",
-            "Faith is My Shield", "Fear Cuts Deeper", "Forget Me Not", "Guided by Fate", "Hail to the King", "Hale and Hearty",
-            "Have Faith", "I am Sorrow.", "I Can See Clearly Now", "I have the power!", "Ignorance is Bliss",
-            "Knowing is Half the Battle.", "Leaf on the Wind", "Let the Memory Live Again", "Life is Pain", "Like a Rolling Stone",
-            "Live for Today", "Luck of the Draw", "Man for All Seasons", "Master of My Domain", "Measure for Measure",
-            "Might makes Right", "Not the face!", "Nothing to Fear", "Only the Strong Survive", "Pure of Heart",
-            "Riders on the Storm", "Run For Your Life!", "Seize the Day", "Serenity Now", "Sheltered by Faith",
-            "Show me the money!", "Sleep Now in the Fire", "Soundness of Mind", "Strength and Honor", "Strength of Body",
-            "Survival of the Fittest", "Swift as the Wind", "The Riddle of Steel", "Through Thick and Thin", "To the Pain!",
-            "Too Much Information", "Vengeance is Mine"
-        };
-        return options;
+        if (!item) return DropExplorerPlugin::LinkerRarity::White;
+        if ((item->interaction & 0x10) != 0) return DropExplorerPlugin::LinkerRarity::Green;
+        if ((item->interaction & 0x400000) != 0) return DropExplorerPlugin::LinkerRarity::Purple;
+        if ((item->interaction & 0x20000) != 0) return DropExplorerPlugin::LinkerRarity::Gold;
+        if (item->single_item_name && item->single_item_name[0] == 0xA3F) return DropExplorerPlugin::LinkerRarity::Blue;
+        return DropExplorerPlugin::LinkerRarity::White;
     }
 
-    const std::vector<std::string>& GetAuctionInsigniaOptions()
+    ImVec4 GetLinkerRarityColor(const DropExplorerPlugin::LinkerRarity rarity)
     {
-        static const std::vector<std::string> options = {
-            "None", "Aeromancer Insignia", "Anchorite's Insignia", "Artificer's Insignia", "Beastmaster's Insignia",
-            "Blessed Insignia", "Blighter's Insignia", "Bloodstained Insignia", "Bonelace Insignia", "Brawler's Insignia",
-            "Centurion's Insignia", "Disciple's Insignia", "Dreadnought Insignia", "Earthbound Insignia", "Forsaken Insignia",
-            "Frostbound Insignia", "Geomancer Insignia", "Ghost Forge Insignia", "Herald's Insignia", "Hydromancer Insignia",
-            "Infiltrator's Insignia", "Knight's Insignia", "Lieutenant's Insignia", "Minion Master's Insignia", "Mystic's Insignia",
-            "Nightstalker's Insignia", "Prismatic Insignia", "Prodigy's Insignia", "Pyrebound Insignia", "Pyromancer Insignia",
-            "Radiant Insignia", "Saboteur's Insignia", "Scout's Insignia", "Sentinel's Insignia", "Sentry's Insignia",
-            "Shaman's Insignia", "Stalwart Insignia", "Stonefist Insignia", "Stormbound Insignia", "Survivor Insignia",
-            "Tormentor's Insignia", "Undertaker's Insignia", "Vanguard's Insignia", "Virtuoso's Insignia", "Wanderer's Insignia",
-            "Windwalker Insignia"
-        };
-        return options;
+        switch (rarity) {
+            case DropExplorerPlugin::LinkerRarity::Blue: return ImVec4(0.45f, 0.75f, 1.0f, 1.0f);
+            case DropExplorerPlugin::LinkerRarity::Purple: return ImVec4(0.75f, 0.5f, 0.95f, 1.0f);
+            case DropExplorerPlugin::LinkerRarity::Gold: return ImVec4(1.0f, 0.85f, 0.35f, 1.0f);
+            case DropExplorerPlugin::LinkerRarity::Green: return ImVec4(0.35f, 1.0f, 0.4f, 1.0f);
+            default: return ImVec4(0.9f, 0.9f, 0.9f, 1.0f);
+        }
     }
 
-    const std::vector<std::string>& GetAuctionRuneOptions()
+    const char* GetLinkerRarityName(const DropExplorerPlugin::LinkerRarity rarity)
     {
-        static const auto options = [] {
-            std::vector<std::string> values = {
-                "None", "Rune of Attunement", "Rune of Clarity", "Rune of Purity", "Rune of Recovery", "Rune of Restoration",
-                "Rune of Vitae", "Rune of Minor Vigor", "Rune of Major Vigor", "Rune of Superior Vigor"
-            };
-            constexpr std::pair<const char*, const char*> attributes[] = {
-                {"Warrior", "Strength"}, {"Warrior", "Axe Mastery"}, {"Warrior", "Hammer Mastery"}, {"Warrior", "Swordsmanship"}, {"Warrior", "Tactics"},
-                {"Ranger", "Expertise"}, {"Ranger", "Beast Mastery"}, {"Ranger", "Marksmanship"}, {"Ranger", "Wilderness Survival"},
-                {"Monk", "Divine Favor"}, {"Monk", "Healing Prayers"}, {"Monk", "Protection Prayers"}, {"Monk", "Smiting Prayers"},
-                {"Necromancer", "Soul Reaping"}, {"Necromancer", "Blood Magic"}, {"Necromancer", "Curses"}, {"Necromancer", "Death Magic"},
-                {"Mesmer", "Fast Casting"}, {"Mesmer", "Domination Magic"}, {"Mesmer", "Illusion Magic"}, {"Mesmer", "Inspiration Magic"},
-                {"Elementalist", "Energy Storage"}, {"Elementalist", "Air Magic"}, {"Elementalist", "Earth Magic"}, {"Elementalist", "Fire Magic"}, {"Elementalist", "Water Magic"},
-                {"Assassin", "Critical Strikes"}, {"Assassin", "Dagger Mastery"}, {"Assassin", "Deadly Arts"}, {"Assassin", "Shadow Arts"},
-                {"Ritualist", "Spawning Power"}, {"Ritualist", "Channeling Magic"}, {"Ritualist", "Communing"}, {"Ritualist", "Restoration Magic"},
-                {"Paragon", "Leadership"}, {"Paragon", "Command"}, {"Paragon", "Motivation"}, {"Paragon", "Spear Mastery"},
-                {"Dervish", "Mysticism"}, {"Dervish", "Earth Prayers"}, {"Dervish", "Scythe Mastery"}, {"Dervish", "Wind Prayers"}
-            };
-            constexpr const char* ranks[] = {"Minor", "Major", "Superior"};
-            for (const auto& [profession, attribute] : attributes) {
-                for (const auto* rank : ranks) values.emplace_back(std::format("{} Rune of {} {}", profession, rank, attribute));
-            }
-            for (const auto* rank : ranks) values.emplace_back(std::format("Warrior Rune of {} Absorption", rank));
-            return values;
-        }();
-        return options;
+        switch (rarity) {
+            case DropExplorerPlugin::LinkerRarity::Blue: return "Magical (Blue)";
+            case DropExplorerPlugin::LinkerRarity::Purple: return "Rare (Purple)";
+            case DropExplorerPlugin::LinkerRarity::Gold: return "Elite (Gold)";
+            case DropExplorerPlugin::LinkerRarity::Green: return "Unique (Green)";
+            default: return "Common (White)";
+        }
+    }
+
+    std::string CleanRawText(const std::string& input)
+    {
+        std::string out;
+        out.reserve(input.size());
+        bool in_tag = false;
+        for (const char c : input) {
+            if (c == '<') { in_tag = true; continue; }
+            if (c == '>') { in_tag = false; continue; }
+            if (!in_tag) out.push_back(c);
+        }
+        return out;
+    }
+
+    char GetChannelChar(const int channel_idx)
+    {
+        switch (channel_idx) {
+            case 0: return '#';
+            case 1: return '@';
+            case 2: return '$';
+            case 3: return '!';
+            case 4: return '%';
+            default: return '#';
+        }
     }
 
     ImVec4 GetRarityColor(DropExplorer::DropRarity rarity)
@@ -199,6 +227,8 @@ void DropExplorerPlugin::Initialize(ImGuiContext* ctx, const ImGuiAllocFns alloc
     rates_client_ = std::make_unique<AsyncRestClient>();
     vendor_prices_client_ = std::make_unique<AsyncRestClient>();
     auction_client_ = std::make_unique<AsyncRestClient>();
+    messages_client_ = std::make_unique<AsyncRestClient>();
+    StartTradeChatFeed();
 
     GW::StoC::RegisterPacketCallback<GW::Packet::StoC::QuotedItemPrice>(&price_quote_entry_, [this](GW::HookStatus*, const GW::Packet::StoC::QuotedItemPrice* packet) {
         OnPriceQuote(packet);
@@ -216,6 +246,35 @@ void DropExplorerPlugin::Initialize(ImGuiContext* ctx, const ImGuiAllocFns alloc
         if (inventory_add_context_menu_fn_) inventory_add_context_menu_fn_(DrawInventoryContextMenuEntry);
     }
 
+    const auto on_item_click = [](GW::HookStatus* status, GW::UI::UIPacket::kMouseAction* action, GW::Item* gw_item) {
+        if (!action || !gw_item || !gw_item->item_id) return;
+        auto* plugin = static_cast<DropExplorerPlugin*>(ToolboxPluginInstance());
+        if (!plugin) return;
+
+        const auto is_right = (static_cast<uint32_t>(action->current_state) == 999u);
+        const auto is_click = (action->current_state == GW::UI::UIPacket::ActionState::MouseClick ||
+                               action->current_state == GW::UI::UIPacket::ActionState::MouseUp);
+
+        if (plugin->linker_waiting_for_item_ && (is_right || is_click)) {
+            plugin->linker_waiting_for_item_ = false;
+            plugin->SetLinkerFocusedItem(gw_item);
+            plugin->linker_focus_requested_ = true;
+            plugin->current_tab_ = 1;
+            if (status) status->blocked = true;
+            return;
+        }
+
+        if (plugin->auction_waiting_for_item_ && (is_right || is_click)) {
+            plugin->auction_waiting_for_item_ = false;
+            plugin->PrefillAuctionItem(gw_item);
+            plugin->auction_focus_requested_ = true;
+            plugin->current_tab_ = 0;
+            if (status) status->blocked = true;
+            return;
+        }
+    };
+    GW::Items::RegisterItemClickCallback(&item_click_entry_, on_item_click);
+
     zones_ = DropExplorer::GetBuiltinZones();
     NormalizeUnverifiedData(zones_);
     BuildItemIndex();
@@ -223,17 +282,29 @@ void DropExplorerPlugin::Initialize(ImGuiContext* ctx, const ImGuiAllocFns alloc
 
 void DropExplorerPlugin::Terminate()
 {
+    trade_chat_enabled_ = false;
+    trade_chat_thread_.request_stop();
+    if (trade_chat_thread_.joinable()) trade_chat_thread_.join();
+    GW::Items::RemoveItemClickCallback(&item_click_entry_);
+    if (discovery_client_) discovery_client_->Abort();
+    discovery_client_.reset();
     if (inventory_remove_context_menu_fn_) inventory_remove_context_menu_fn_(DrawInventoryContextMenuEntry);
+    if (linker_decode_state_) {
+        linker_decode_state_->cancelled = true;
+        linker_decode_state_.reset();
+    }
     GW::StoC::RemoveCallback<GW::Packet::StoC::QuotedItemPrice>(&price_quote_entry_);
     GW::StoC::RemoveCallback<GW::Packet::StoC::TransactionDone>(&trans_done_entry_);
     if (telemetry_client_ && telemetry_client_->IsPending()) telemetry_client_->Abort();
     if (rates_client_ && rates_client_->IsPending()) rates_client_->Abort();
     if (vendor_prices_client_ && vendor_prices_client_->IsPending()) vendor_prices_client_->Abort();
     if (auction_client_ && auction_client_->IsPending()) auction_client_->Abort();
+    if (messages_client_ && messages_client_->IsPending()) messages_client_->Abort();
     telemetry_client_.reset();
     rates_client_.reset();
     vendor_prices_client_.reset();
     auction_client_.reset();
+    messages_client_.reset();
     ShutdownAsyncRest();
     agent_names_cache_.clear();
     ToolboxUIPlugin::Terminate();
@@ -255,10 +326,16 @@ std::string DropExplorerPlugin::GetResolvedAgentName(const uint32_t agent_id, co
 
 void DropExplorerPlugin::Update(const float delta)
 {
-    UpdateCommunityRatesDownload();
-    UpdateVendorPricesDownload();
-    UpdateDropTelemetry(delta);
-    UpdateAuctionRequest(delta);
+    trade_chat_enabled_ = show_auction_house_;
+    UpdateTradeChatListings();
+    UpdateServiceDiscovery();
+    if (!crowdsourced_data_disabled_) {
+        UpdateCommunityRatesDownload();
+        UpdateVendorPricesDownload();
+        UpdateDropTelemetry(delta);
+    }
+    if (show_auction_house_ || show_my_listings_) UpdateAuctionRequest(delta);
+    UpdateMessageRequests(delta);
 
     navigation_refresh_timer_ += delta;
     if (navigation_target_map_id_ && navigation_refresh_timer_ >= 2.0f && GW::Map::GetIsMapLoaded() &&
@@ -266,11 +343,58 @@ void DropExplorerPlugin::Update(const float delta)
         navigation_refresh_timer_ = 0.0f;
         if (set_travel_dest_fn_) set_travel_dest_fn_(navigation_target_map_id_);
     }
+
+    if (linker_waiting_for_item_ || auction_waiting_for_item_) {
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+            const auto* item = GW::Items::GetHoveredItem();
+            if (item && item->item_id) {
+                dismiss_inventory_context_menu_until_ = GetTickCount64() + 250;
+                if (linker_waiting_for_item_) {
+                    linker_waiting_for_item_ = false;
+                    SetLinkerFocusedItem(item);
+                    linker_focus_requested_ = true;
+                    current_tab_ = 1;
+                }
+                else if (auction_waiting_for_item_) {
+                    auction_waiting_for_item_ = false;
+                    PrefillAuctionItem(item);
+                    auction_focus_requested_ = true;
+                    current_tab_ = 0;
+                }
+            }
+        }
+    }
+
     if (tracked_mob_name_.empty()) return;
     tracking_scan_timer_ += delta;
     if (tracking_scan_timer_ < 0.25f) return;
     tracking_scan_timer_ = 0.0f;
     RefreshTrackedMobMarker();
+}
+
+bool DropExplorerPlugin::WndProc(const UINT message, const WPARAM, const LPARAM)
+{
+    if ((message == WM_RBUTTONDOWN || message == WM_RBUTTONUP || message == WM_GW_RBUTTONCLICK) &&
+        (linker_waiting_for_item_ || auction_waiting_for_item_)) {
+        const auto* item = GW::Items::GetHoveredItem();
+        if (item && item->item_id) {
+            dismiss_inventory_context_menu_until_ = GetTickCount64() + 250;
+            if (linker_waiting_for_item_) {
+                linker_waiting_for_item_ = false;
+                SetLinkerFocusedItem(item);
+                linker_focus_requested_ = true;
+                current_tab_ = 1;
+            }
+            else if (auction_waiting_for_item_) {
+                auction_waiting_for_item_ = false;
+                PrefillAuctionItem(item);
+                auction_focus_requested_ = true;
+                current_tab_ = 0;
+            }
+            return true;
+        }
+    }
+    return false;
 }
 
 bool DropExplorerPlugin::RefreshTrackedMobMarker()
@@ -328,11 +452,27 @@ void DropExplorerPlugin::LoadSettings(const wchar_t* folder)
     LoadSetting("telemetry_enabled", telemetry_enabled_);
     LoadSetting("download_community_rates", download_community_rates_);
     LoadSetting("telemetry_install_id", telemetry_install_id_);
-    auto endpoint = std::string{};
-    LoadSetting("telemetry_endpoint", endpoint);
-    PluginUtils::StrCopy(telemetry_endpoint_, endpoint.c_str(), IM_ARRAYSIZE(telemetry_endpoint_));
-    LoadSetting("batch_interval_minutes", batch_interval_minutes_);
-    if (batch_interval_minutes_ < 1.0f) batch_interval_minutes_ = 5.0f;
+    auto legacy_auction_disabled = false;
+    auto legacy_messages_disabled = false;
+    auto legacy_explorer_tools_hidden = false;
+    crowdsourced_data_disabled_ = !telemetry_enabled_;
+    LoadSetting("auction_disabled", legacy_auction_disabled);
+    LoadSetting("messages_disabled", legacy_messages_disabled);
+    LoadSetting("explorer_tools_hidden", legacy_explorer_tools_hidden);
+    show_auction_house_ = !legacy_auction_disabled;
+    show_my_listings_ = !legacy_auction_disabled;
+    show_messages_ = !legacy_messages_disabled;
+    show_zone_explorer_ = !legacy_explorer_tools_hidden;
+    show_item_search_ = !legacy_explorer_tools_hidden;
+    LoadSetting("show_auction_house", show_auction_house_);
+    LoadSetting("show_my_listings", show_my_listings_);
+    LoadSetting("show_messages", show_messages_);
+    LoadSetting("show_zone_explorer", show_zone_explorer_);
+    LoadSetting("show_item_search", show_item_search_);
+    LoadSetting("crowdsourced_data_disabled", crowdsourced_data_disabled_);
+    telemetry_enabled_ = !crowdsourced_data_disabled_;
+    download_community_rates_ = !crowdsourced_data_disabled_;
+    batch_interval_minutes_ = 0.5f;
     auto gh_url = std::string{};
     LoadSetting("github_base_url", gh_url);
     if (!gh_url.empty()) {
@@ -345,16 +485,25 @@ void DropExplorerPlugin::LoadSettings(const wchar_t* folder)
     if (std::filesystem::exists(db_path)) {
         LoadExternalDatabase(db_path);
     }
-    StartCommunityRatesDownload();
-    StartVendorPricesDownload();
+    if (!crowdsourced_data_disabled_) {
+        StartCommunityRatesDownload();
+        StartVendorPricesDownload();
+    }
+    LoadLocalMessages();
+    LoadPendingAuctionListings();
 }
 
 void DropExplorerPlugin::SaveSettings(const wchar_t* folder)
 {
     SaveSetting("telemetry_enabled", telemetry_enabled_);
     SaveSetting("download_community_rates", download_community_rates_);
+    SaveSetting("show_auction_house", show_auction_house_);
+    SaveSetting("show_my_listings", show_my_listings_);
+    SaveSetting("show_messages", show_messages_);
+    SaveSetting("show_zone_explorer", show_zone_explorer_);
+    SaveSetting("show_item_search", show_item_search_);
+    SaveSetting("crowdsourced_data_disabled", crowdsourced_data_disabled_);
     SaveSetting("telemetry_install_id", telemetry_install_id_);
-    SaveSetting("telemetry_endpoint", std::string(telemetry_endpoint_));
     SaveSetting("batch_interval_minutes", batch_interval_minutes_);
     SaveSetting("github_base_url", std::string(github_base_url_));
     ToolboxUIPlugin::SaveSettings(folder);
@@ -362,59 +511,43 @@ void DropExplorerPlugin::SaveSettings(const wchar_t* folder)
 
 void DropExplorerPlugin::DrawSettings()
 {
-    ImGui::TextDisabled("Drop Explorer Configuration");
+    ImGui::TextDisabled("AuctionHouse&DropFinder Configuration");
     ImGui::Separator();
 
-    ImGui::TextColored(ImVec4(0.4f, 0.85f, 1.0f, 1.0f), "Community Rates & Vendor Prices");
-    ImGui::Checkbox("Download community-observed rates & vendor prices", &download_community_rates_);
-    ImGui::InputTextWithHint("GitHub Raw URL##DropGhBase", "https://raw.githubusercontent.com/.../main", github_base_url_, IM_ARRAYSIZE(github_base_url_));
-    if (ImGui::Button("Sync from GitHub Now")) {
-        StartCommunityRatesDownload();
-        StartVendorPricesDownload();
+    ImGui::TextColored(ImVec4(0.4f, 0.85f, 1.0f, 1.0f), "Visible tabs");
+    ImGui::Checkbox("Show Auction House", &show_auction_house_);
+    ImGui::Checkbox("Show My Listings", &show_my_listings_);
+    ImGui::Checkbox("Show Messages", &show_messages_);
+    ImGui::Checkbox("Show Zone Explorer", &show_zone_explorer_);
+    ImGui::Checkbox("Show Item Search", &show_item_search_);
+    if (!show_auction_house_ && !show_my_listings_) {
+        if (auction_client_ && auction_client_->IsPending()) auction_client_->Abort();
+        auction_request_kind_ = AuctionRequestKind::None;
+        pending_auction_inflight_index_ = static_cast<size_t>(-1);
     }
-    ImGui::SameLine();
-    ImGui::TextDisabled("Status: %s", last_sync_status_.c_str());
-
+    ImGui::TextDisabled("When Messages is hidden, cleanup checks delete delivered server mail without saving it locally.");
     ImGui::Separator();
-    ImGui::TextColored(ImVec4(0.4f, 0.85f, 1.0f, 1.0f), "Telemetry & Crowdsourced Ingestion");
-    if (ImGui::Checkbox("Contribute anonymous drop & vendor observations", &telemetry_enabled_) && !telemetry_enabled_) {
-        ResetDropTelemetry();
-        upload_queue_.clear();
-        vendor_upload_queue_.clear();
-    }
-    ImGui::TextWrapped("Opt-in telemetry buffers mob kills and vendor quotes/sales for 5-10 minutes, then sends all accumulated data in a single batch. No account, character, chat, or inventory scanning is sent.");
-
-    ImGui::InputTextWithHint("Collector server", "https://your-stable-cloudflare-host", telemetry_endpoint_, IM_ARRAYSIZE(telemetry_endpoint_));
-    ImGui::TextDisabled("The same server provides telemetry and Auction House listings.");
-    ImGui::SliderFloat("Batch Interval (minutes)##DropBatchInterval", &batch_interval_minutes_, 5.0f, 10.0f, "%.1f min");
-
-    const float remaining_sec = std::max(0.0f, (batch_interval_minutes_ * 60.0f) - (batch_timer_ms_ / 1000.0f));
-    const int rem_min = static_cast<int>(remaining_sec) / 60;
-    const int rem_s = static_cast<int>(remaining_sec) % 60;
-    ImGui::Text("Batch timer: %02d:%02d until next check | Queued: %zu kills, %zu vendor records",
-                rem_min, rem_s, upload_queue_.size(), vendor_upload_queue_.size());
-
-    const bool has_queued_data = !upload_queue_.empty() || !vendor_upload_queue_.empty();
-    if (!has_queued_data) ImGui::BeginDisabled();
-    if (ImGui::Button("Send Batch Now")) {
-        TriggerBatchUpload();
-    }
-    if (!has_queued_data) ImGui::EndDisabled();
-    ImGui::SameLine();
-    ImGui::TextDisabled("Last Upload: %s", last_upload_status_.c_str());
-
-    ImGui::Separator();
-    if (ImGui::Button("Reload Built-in & External Database")) {
-        zones_ = DropExplorer::GetBuiltinZones();
-        NormalizeUnverifiedData(zones_);
-        const auto db_path = std::filesystem::path(settings_folder_) / "drops_database.json";
-        if (std::filesystem::exists(db_path)) {
-            LoadExternalDatabase(db_path);
+    ImGui::TextColored(ImVec4(0.4f, 0.85f, 1.0f, 1.0f), "Community data");
+    if (ImGui::Checkbox("I don't want to send or receive crowdsourced drop-rate data", &crowdsourced_data_disabled_)) {
+        telemetry_enabled_ = !crowdsourced_data_disabled_;
+        download_community_rates_ = !crowdsourced_data_disabled_;
+        if (crowdsourced_data_disabled_) {
+            ResetDropTelemetry();
+            upload_queue_.clear();
+            vendor_upload_queue_.clear();
+            if (telemetry_client_ && telemetry_client_->IsPending()) telemetry_client_->Abort();
+            if (rates_client_ && rates_client_->IsPending()) rates_client_->Abort();
+            if (vendor_prices_client_ && vendor_prices_client_->IsPending()) vendor_prices_client_->Abort();
         }
-        BuildItemIndex();
-        StartCommunityRatesDownload();
-        StartVendorPricesDownload();
+        else {
+            StartCommunityRatesDownload();
+            StartVendorPricesDownload();
+        }
     }
+    ImGui::TextWrapped("Sharing anonymous kill and drop observations helps the community calculate reliable drop rates and improve farming methods. When disabled, kills and drops are not monitored at all.");
+    ImGui::Separator();
+    ImGui::TextWrapped("Server: %s", service_base_url_.empty() ? "Connecting..." : service_base_url_.c_str());
+    ImGui::TextDisabled("Drop upload: %s | Community sync: %s", last_upload_status_.c_str(), last_sync_status_.c_str());
 }
 
 void DropExplorerPlugin::ResetDropTelemetry()
@@ -453,7 +586,7 @@ void DropExplorerPlugin::UpdateDropTelemetry(const float delta)
         }
     }
 
-    if (!telemetry_enabled_ || !telemetry_endpoint_[0]) {
+    if (!telemetry_enabled_) {
         if (!observed_mobs_.empty() || !observed_items_.empty() || !pending_kills_.empty()) ResetDropTelemetry();
         return;
     }
@@ -570,7 +703,7 @@ void DropExplorerPlugin::UpdateDropTelemetry(const float delta)
 
 void DropExplorerPlugin::TriggerBatchUpload()
 {
-    if (!telemetry_client_ || !telemetry_enabled_ || !telemetry_endpoint_[0]) return;
+    if (!telemetry_client_ || !telemetry_enabled_ || service_base_url_.empty()) return;
     if (upload_queue_.empty() && vendor_upload_queue_.empty()) return;
     if (telemetry_inflight_count_ || vendor_inflight_count_) return;
 
@@ -595,17 +728,13 @@ void DropExplorerPlugin::TriggerBatchUpload()
         return;
     }
 
-    auto endpoint = std::string(telemetry_endpoint_);
-    while (endpoint.ends_with('/')) endpoint.pop_back();
-    if (!endpoint.ends_with("/v1/mobdroptelemetry")) {
-        endpoint += "/v1/mobdroptelemetry";
-    }
+    const auto endpoint = GetServiceBaseUrl() + "/v1/mobdroptelemetry";
 
     telemetry_client_->Clear();
     telemetry_client_->SetUrl(endpoint.c_str());
     telemetry_client_->SetMethod(HttpMethod::Post);
     telemetry_client_->SetHeader("Content-Type", "application/json");
-    telemetry_client_->SetUserAgent("GWToolbox-DropExplorer/1.0");
+    telemetry_client_->SetUserAgent("GWToolbox-AuctionHouseDropFinder/1.0");
     telemetry_client_->SetPostContent(payload, ContentFlag::Copy);
     telemetry_client_->SetConnectTimeoutSec(5);
     telemetry_client_->SetTimeoutSec(15);
@@ -691,7 +820,7 @@ void DropExplorerPlugin::StartVendorPricesDownload()
     while (url.ends_with('/')) url.pop_back();
     url += "/data/vendor-prices.json";
     vendor_prices_client_->SetUrl(url.c_str());
-    vendor_prices_client_->SetUserAgent("GWToolbox-DropExplorer/1.0");
+    vendor_prices_client_->SetUserAgent("GWToolbox-AuctionHouseDropFinder/1.0");
     vendor_prices_client_->SetConnectTimeoutSec(3);
     vendor_prices_client_->SetTimeoutSec(5);
     vendor_prices_client_->ExecuteAsync();
@@ -735,7 +864,7 @@ void DropExplorerPlugin::StartCommunityRatesDownload()
     while (url.ends_with('/')) url.pop_back();
     url += "/data/community-rates.json";
     rates_client_->SetUrl(url.c_str());
-    rates_client_->SetUserAgent("GWToolbox-DropExplorer/1.0");
+    rates_client_->SetUserAgent("GWToolbox-AuctionHouseDropFinder/1.0");
     rates_client_->SetConnectTimeoutSec(3);
     rates_client_->SetTimeoutSec(5);
     rates_client_->ExecuteAsync();
@@ -881,6 +1010,42 @@ void DropExplorerPlugin::OpenWorldMap()
     });
 }
 
+void DropExplorerPlugin::CenterWorldMapOnZone(const uint32_t map_id)
+{
+    if (!map_id) return;
+    const auto* area = GW::Map::GetMapInfo(static_cast<GW::Constants::MapID>(map_id));
+    if (!area) return;
+
+    GW::GameThread::Enqueue([area] {
+        if (!GW::UI::GetIsWorldMapShowing()) {
+            GW::UI::Keypress(GW::UI::ControlAction_OpenWorldMap);
+        }
+        auto* wmc = GW::Map::GetWorldMapContext();
+        if (!wmc) return;
+
+        wmc->continent = area->continent;
+        float target_x = 0.0f;
+        float target_y = 0.0f;
+        if (area->x && area->y) {
+            target_x = static_cast<float>(area->x);
+            target_y = static_cast<float>(area->y);
+        }
+        else if (area->icon_start_x && area->icon_start_y) {
+            target_x = static_cast<float>(area->icon_start_x + (area->icon_end_x - area->icon_start_x) / 2);
+            target_y = static_cast<float>(area->icon_start_y + (area->icon_end_y - area->icon_start_y) / 2);
+        }
+
+        if (target_x > 0.0f && target_y > 0.0f) {
+            const auto span_x = wmc->bottom_right.x - wmc->top_left.x;
+            const auto span_y = wmc->bottom_right.y - wmc->top_left.y;
+            wmc->top_left.x = target_x - span_x * 0.5f;
+            wmc->top_left.y = target_y - span_y * 0.5f;
+            wmc->bottom_right.x = target_x + span_x * 0.5f;
+            wmc->bottom_right.y = target_y + span_y * 0.5f;
+        }
+    });
+}
+
 void DropExplorerPlugin::ViewZone(const DropExplorer::ZoneInfo& zone)
 {
     SelectZoneByName(zone.name);
@@ -896,7 +1061,7 @@ void DropExplorerPlugin::ViewZone(const DropExplorer::ZoneInfo& zone)
         navigation_status_ = "Travel waypoint support is unavailable in the loaded GWToolbox build";
     }
 
-    OpenWorldMap();
+    CenterWorldMapOnZone(zone.map_id);
 }
 
 void DropExplorerPlugin::TravelToZone(const DropExplorer::ZoneInfo& zone)
@@ -921,6 +1086,11 @@ void DropExplorerPlugin::TravelToZone(const DropExplorer::ZoneInfo& zone)
 void DropExplorerPlugin::TrackMob(const DropExplorer::ZoneInfo& zone, const DropExplorer::MobInfo& mob, const bool travel)
 {
     if (clear_custom_point_fn_) clear_custom_point_fn_();
+    highlighted_mob_name_ = mob.name;
+    SelectZoneByName(zone.name);
+    current_tab_ = 3;
+    zone_explorer_focus_requested_ = true;
+
     if (!mob.trackable) {
         tracked_mob_name_.clear();
         tracked_agent_id_ = 0;
@@ -938,7 +1108,7 @@ void DropExplorerPlugin::TrackMob(const DropExplorer::ZoneInfo& zone, const Drop
     tracking_scan_timer_ = 0.25f;
     navigation_target_map_id_ = zone.map_id;
     if (RefreshTrackedMobMarker()) {
-        if (!travel) OpenWorldMap();
+        if (!travel) CenterWorldMapOnZone(zone.map_id);
         return;
     }
     if (travel) TravelToZone(zone);
@@ -950,7 +1120,7 @@ void DropExplorerPlugin::SelectZoneByMapId(const uint32_t map_id)
     for (size_t i = 0; i < zones_.size(); ++i) {
         if (zones_[i].map_id == map_id) {
             selected_zone_idx_ = static_cast<int>(i);
-            current_tab_ = 0;
+            current_tab_ = 3;
             return;
         }
     }
@@ -961,7 +1131,7 @@ void DropExplorerPlugin::SelectZoneByName(const std::string& zone_name)
     for (size_t i = 0; i < zones_.size(); ++i) {
         if (zones_[i].name == zone_name) {
             selected_zone_idx_ = static_cast<int>(i);
-            current_tab_ = 0;
+            current_tab_ = 3;
             return;
         }
     }
@@ -1054,23 +1224,58 @@ void DropExplorerPlugin::Draw(IDirect3DDevice9*)
     }
 
     if (ImGui::BeginTabBar("DropExplorerTabs")) {
-        if (ImGui::BeginTabItem("Zone Explorer")) {
-            current_tab_ = 0;
-            DrawZoneExplorerView();
-            ImGui::EndTabItem();
+        if (show_auction_house_) {
+            const auto auction_flags = auction_focus_requested_ ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
+            if (ImGui::BeginTabItem("Auction House", nullptr, auction_flags)) {
+                auction_focus_requested_ = false;
+                current_tab_ = 0;
+                DrawAuctionHouseView();
+                ImGui::EndTabItem();
+            }
+        }
+        if (show_my_listings_) {
+            if (ImGui::BeginTabItem("My Listings")) {
+                current_tab_ = 1;
+                DrawMyListingsView();
+                ImGui::EndTabItem();
+            }
         }
 
-        if (ImGui::BeginTabItem("Item Search")) {
-            current_tab_ = 1;
-            DrawItemSearchView();
-            ImGui::EndTabItem();
+        if (show_messages_) {
+            size_t unread_count = 0;
+            for (const auto& msg : local_messages_) {
+                if (!msg.is_read) unread_count++;
+            }
+            const std::string msg_title = unread_count > 0 ? std::format("Messages ({})###MessagesTab", unread_count) : "Messages###MessagesTab";
+            const auto msg_flags = message_tab_focus_requested_ ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
+            if (ImGui::BeginTabItem(msg_title.c_str(), nullptr, msg_flags)) {
+                message_tab_focus_requested_ = false;
+                current_tab_ = 2;
+                DrawMessagesView();
+                ImGui::EndTabItem();
+            }
         }
 
-        const auto auction_flags = auction_focus_requested_ ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
-        if (ImGui::BeginTabItem("Auction House", nullptr, auction_flags)) {
-            auction_focus_requested_ = false;
-            current_tab_ = 2;
-            DrawAuctionHouseView();
+        if (show_zone_explorer_) {
+            const auto zone_flags = zone_explorer_focus_requested_ ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
+            if (ImGui::BeginTabItem("Zone Explorer", nullptr, zone_flags)) {
+                zone_explorer_focus_requested_ = false;
+                current_tab_ = 3;
+                DrawZoneExplorerView();
+                ImGui::EndTabItem();
+            }
+        }
+        if (show_item_search_) {
+            if (ImGui::BeginTabItem("Item Search")) {
+                current_tab_ = 4;
+                DrawItemSearchView();
+                ImGui::EndTabItem();
+            }
+        }
+
+        if (ImGui::BeginTabItem("Settings")) {
+            current_tab_ = 5;
+            DrawSettings();
             ImGui::EndTabItem();
         }
 
@@ -1196,9 +1401,15 @@ void DropExplorerPlugin::DrawZoneExplorerView()
 
             for (const auto* boss : bosses) {
                 ImGui::PushID(boss->name.c_str());
+                const auto is_highlighted = !highlighted_mob_name_.empty() && boss->name == highlighted_mob_name_;
                 std::string header = "[BOSS] " + boss->name + " (" + boss->level_str + " " + boss->profession + ")";
                 if (!boss->boss_skill.empty()) {
                     header += " - Elite: " + boss->boss_skill;
+                }
+                if (is_highlighted) header += " [TARGET MOB]";
+
+                if (is_highlighted && zone_explorer_focus_requested_) {
+                    ImGui::SetScrollHereY(0.25f);
                 }
 
                 if (ImGui::CollapsingHeader(header.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -1261,8 +1472,15 @@ void DropExplorerPlugin::DrawZoneExplorerView()
 
             for (const auto* mob : regular_mobs) {
                 ImGui::PushID(mob->name.c_str());
-                const std::string header = mob->name + " (" + mob->level_str + " " + mob->profession + ")";
-                if (ImGui::CollapsingHeader(header.c_str())) {
+                const auto is_highlighted = !highlighted_mob_name_.empty() && mob->name == highlighted_mob_name_;
+                std::string header = mob->name + " (" + mob->level_str + " " + mob->profession + ")";
+                if (is_highlighted) header += " [TARGET MOB]";
+
+                if (is_highlighted && zone_explorer_focus_requested_) {
+                    ImGui::SetScrollHereY(0.25f);
+                }
+
+                if (ImGui::CollapsingHeader(header.c_str(), is_highlighted ? ImGuiTreeNodeFlags_DefaultOpen : ImGuiTreeNodeFlags_None)) {
                     if (!mob->description.empty()) ImGui::TextWrapped("%s", mob->description.c_str());
                     if (!mob->movement_notes.empty()) {
                         ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.2f, 1.0f), "Movement: %s", mob->movement_notes.c_str());
@@ -1474,23 +1692,230 @@ void DropExplorerPlugin::DrawItemSearchView()
 
 std::string DropExplorerPlugin::GetServiceBaseUrl() const
 {
-    auto url = std::string(telemetry_endpoint_);
-    if (const auto api_path = url.find("/v1/"); api_path != std::string::npos) url.resize(api_path);
-    while (url.ends_with('/')) url.pop_back();
-    return url;
+    return service_base_url_;
+}
+
+void DropExplorerPlugin::UpdateServiceDiscovery()
+{
+    const auto now = GetTickCount64();
+    if (discovery_client_ && discovery_client_->IsCompleted()) {
+        if (discovery_client_->IsSuccessful()) {
+            auto url = discovery_client_->GetContent();
+            while (!url.empty() && std::isspace(static_cast<unsigned char>(url.back()))) url.pop_back();
+            constexpr auto prefix = std::string_view("https://");
+            constexpr auto suffix = std::string_view(".trycloudflare.com");
+            if (url.starts_with(prefix) && url.ends_with(suffix)) {
+                const auto hostname = std::string_view(url).substr(prefix.size(), url.size() - prefix.size() - suffix.size());
+                if (!hostname.empty() && std::ranges::all_of(hostname, [](const char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-'; })) {
+                    if (service_base_url_ != url) {
+                        service_base_url_ = std::move(url);
+                        auction_refresh_timer_ = 60.0f;
+                    }
+                }
+            }
+        }
+        discovery_client_.reset();
+    }
+    if (discovery_client_ || now < discovery_next_ms_) return;
+    discovery_next_ms_ = now + 300000;
+    discovery_client_ = std::make_unique<AsyncRestClient>();
+    constexpr auto url = "https://api.github.com/repos/joshuwamccoy23-glitch/gw-drops/contents/data/auction-droplistings.txt?ref=main";
+    discovery_client_->SetUrl(url);
+    discovery_client_->SetHeader("Accept", "application/vnd.github.raw+json");
+    discovery_client_->SetUserAgent("GWToolbox-AuctionHouseDropFinder/1.0");
+    discovery_client_->SetConnectTimeoutSec(5);
+    discovery_client_->SetTimeoutSec(10);
+    discovery_client_->ExecuteAsync();
+}
+
+void DropExplorerPlugin::StartTradeChatFeed()
+{
+    trade_chat_thread_ = std::jthread([this](const std::stop_token stop) {
+        const auto wait = [&](const uint32_t milliseconds) {
+            for (uint32_t elapsed = 0; elapsed < milliseconds && !stop.stop_requested(); elapsed += 100) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+        };
+        constexpr glz::opts json_options{.error_on_unknown_keys = false};
+        while (!stop.stop_requested()) {
+            if (!trade_chat_enabled_) {
+                trade_chat_connected_ = false;
+                wait(500);
+                continue;
+            }
+            std::unique_ptr<easywsclient::WebSocket> socket(easywsclient::WebSocket::from_url("wss://kamadan.gwtoolbox.com"));
+            if (!socket) {
+                trade_chat_connected_ = false;
+                wait(5000);
+                continue;
+            }
+            trade_chat_connected_ = true;
+            socket->send(R"({"query":" "})");
+            while (!stop.stop_requested() && trade_chat_enabled_ && socket->getReadyState() != easywsclient::WebSocket::CLOSED) {
+                socket->poll(200);
+                socket->dispatch([&](const std::string& data) {
+                    TradeChatApi::TradeChatEnvelope envelope;
+                    if (glz::read<json_options>(envelope, data)) return;
+                    std::vector<TradeChatMessage> received;
+                    if (!envelope.results.empty()) {
+                        received.reserve(envelope.results.size());
+                        for (const auto& raw : envelope.results) {
+                            const auto timestamp = ParseTradeChatTimestamp(raw.t.str);
+                            if (!raw.s.empty() && !raw.m.empty() && timestamp) received.push_back({raw.s, raw.m, timestamp});
+                        }
+                    }
+                    else {
+                        const auto timestamp = ParseTradeChatTimestamp(envelope.t.str);
+                        if (!envelope.s.empty() && !envelope.m.empty() && timestamp) received.push_back({envelope.s, envelope.m, timestamp});
+                    }
+                    if (received.empty()) return;
+                    std::scoped_lock lock(trade_chat_mutex_);
+                    trade_chat_inbox_.insert(trade_chat_inbox_.end(),
+                        std::make_move_iterator(received.begin()), std::make_move_iterator(received.end()));
+                });
+            }
+            trade_chat_connected_ = false;
+            wait(1000);
+        }
+    });
+}
+
+void DropExplorerPlugin::UpdateTradeChatListings()
+{
+    std::vector<TradeChatMessage> received;
+    {
+        std::scoped_lock lock(trade_chat_mutex_);
+        received.swap(trade_chat_inbox_);
+    }
+    for (const auto& message : received) IngestTradeChatMessage(message);
+
+    const auto now = static_cast<uint64_t>(std::time(nullptr));
+    std::erase_if(trade_chat_listings_, [&](const AuctionListing& listing) { return listing.expires_at <= now; });
+}
+
+void DropExplorerPlugin::IngestTradeChatMessage(const TradeChatMessage& message)
+{
+    const auto now = static_cast<uint64_t>(std::time(nullptr));
+    if (message.timestamp + 600 <= now) return;
+    const auto clean = StripXmlTags(message.message);
+    const std::regex marker_regex(R"(\b(WTB|WTS)\b)", std::regex_constants::icase);
+    const std::regex price_regex(R"((\d+(?:[\.,]\d+)?)\s*(ectoplasm(?:s)?|ectos?|e|armbrace(?:s)?|arms?|a|platinum|plat|k|gold|g)\b)", std::regex_constants::icase);
+    const std::regex quantity_regex(R"(^\s*(?:x\s*(\d+)|(\d+)\s*x)\s*)", std::regex_constants::icase);
+    const std::regex stat_regex(R"(\b(?:q|req)\s*\d+\b|(?:\+|-)\d+\s*(?:/|\^)\s*-?\d+|\+\d+\b)", std::regex_constants::icase);
+    const std::regex parenthetical_regex(R"(\([^)]{1,80}\))");
+    const std::regex noise_regex(R"(\b(?:stack|stacks|ea|each|only|pm|me|offer|offers|open\s+trade|pls|please)\b)", std::regex_constants::icase);
+    const std::regex whitespace_regex(R"(\s+)");
+
+    std::vector<std::pair<size_t, std::string>> markers;
+    for (auto it = std::sregex_iterator(clean.begin(), clean.end(), marker_regex); it != std::sregex_iterator(); ++it) {
+        markers.emplace_back(static_cast<size_t>(it->position()), ToLower((*it)[1].str()));
+    }
+    for (size_t marker_index = 0; marker_index < markers.size(); ++marker_index) {
+        const auto begin = markers[marker_index].first + 3;
+        const auto end = marker_index + 1 < markers.size() ? markers[marker_index + 1].first : clean.size();
+        auto section = clean.substr(begin, end - begin);
+        for (size_t i = 0; i < section.size(); ++i) {
+            const auto comma_between_digits = section[i] == ',' && i > 0 && i + 1 < section.size() &&
+                std::isdigit(static_cast<unsigned char>(section[i - 1])) && std::isdigit(static_cast<unsigned char>(section[i + 1]));
+            if ((section[i] == ',' && !comma_between_digits) || section[i] == ';' || section[i] == '|') section[i] = '\n';
+            if (section[i] == ':' && i + 1 < section.size() && section[i + 1] == ':') {
+                section[i] = '\n';
+                section[i + 1] = ' ';
+            }
+        }
+
+        std::stringstream fragments(section);
+        std::string fragment;
+        while (std::getline(fragments, fragment)) {
+            fragment = TextUtils::trim(fragment, " \t\r\n-=:~^");
+            std::smatch price_match;
+            if (!std::regex_search(fragment, price_match, price_regex)) continue;
+
+            auto descriptor = fragment.substr(0, static_cast<size_t>(price_match.position()));
+            auto quantity = uint32_t{1};
+            std::smatch quantity_match;
+            if (std::regex_search(descriptor, quantity_match, quantity_regex)) {
+                const auto raw_quantity = quantity_match[1].matched ? quantity_match[1].str() : quantity_match[2].str();
+                quantity = static_cast<uint32_t>(std::clamp(strtoul(raw_quantity.c_str(), nullptr, 10), 1ul, 250ul));
+                descriptor = quantity_match.suffix().str();
+            }
+
+            std::vector<std::string> stats;
+            for (auto it = std::sregex_iterator(descriptor.begin(), descriptor.end(), stat_regex); it != std::sregex_iterator(); ++it) {
+                stats.push_back(it->str());
+            }
+            for (auto it = std::sregex_iterator(descriptor.begin(), descriptor.end(), parenthetical_regex); it != std::sregex_iterator(); ++it) {
+                stats.push_back(TextUtils::trim(it->str(), " ()"));
+            }
+            auto item_name = std::regex_replace(descriptor, stat_regex, " ");
+            item_name = std::regex_replace(item_name, parenthetical_regex, " ");
+            item_name = std::regex_replace(item_name, noise_regex, " ");
+            item_name = std::regex_replace(item_name, whitespace_regex, " ");
+            item_name = TextUtils::trim(item_name, " \t\r\n-=:~^()[]{}");
+            if (item_name.size() < 2) continue;
+
+            auto value_text = price_match[1].str();
+            std::ranges::replace(value_text, ',', '.');
+            const auto value = strtod(value_text.c_str(), nullptr);
+            if (value <= 0.0) continue;
+            const auto currency_token = ToLower(price_match[2].str());
+            auto currency_type = std::string{"gold"};
+            auto currency_label = std::string{"Gold"};
+            if (currency_token == "k" || currency_token.starts_with("plat")) {
+                currency_type = "platinum";
+                currency_label = "Platinum";
+            }
+            else if (currency_token == "a" || currency_token.starts_with("arm")) {
+                currency_type = "armbrace";
+                currency_label = value == 1.0 ? "Armbrace" : "Armbraces";
+            }
+            else if (currency_token == "e" || currency_token.starts_with("ecto")) {
+                currency_type = "ectoplasm";
+                currency_label = "Ectoplasm";
+            }
+
+            std::string modifiers;
+            for (const auto& stat : stats) {
+                if (!modifiers.empty()) modifiers += " | ";
+                modifiers += stat;
+            }
+            const auto key = ToLower(message.sender) + '|' + markers[marker_index].second + '|' + ToLower(item_name);
+            AuctionListing listing;
+            listing.listing_id = std::format("trade-{:016x}", std::hash<std::string>{}(key));
+            listing.seller_name = message.sender;
+            listing.listing_type = markers[marker_index].second == "wtb" ? "buy" : "sell";
+            listing.item_name = item_name;
+            listing.quantity = quantity;
+            listing.unit_price = static_cast<uint32_t>(std::clamp(std::llround(value), 0ll, 100000000ll));
+            listing.currency_type = currency_type;
+            listing.modifiers = modifiers;
+            listing.created_at = message.timestamp;
+            listing.expires_at = message.timestamp + 600;
+            listing.is_trade_chat = true;
+            listing.price_display = std::format("{} {}", value_text, currency_label);
+            listing.sort_price = value;
+            const auto existing = std::ranges::find(trade_chat_listings_, listing.listing_id, &AuctionListing::listing_id);
+            if (existing == trade_chat_listings_.end()) trade_chat_listings_.push_back(std::move(listing));
+            else if (existing->created_at <= listing.created_at) *existing = std::move(listing);
+        }
+    }
 }
 
 void DropExplorerPlugin::RefreshAuctionListings()
 {
-    if (!auction_client_ || auction_client_->IsPending()) return;
+    if (auction_client_ && auction_client_->IsPending()) return;
     const auto base = GetServiceBaseUrl();
     if (base.empty()) {
-        auction_status_ = "Collector server URL is not configured";
+        auction_refresh_timer_ = 0.0f;
+        auction_status_ = "Connecting to listings server; retrying automatically";
         return;
     }
-    auction_client_->Clear();
-    auction_client_->SetUrl((base + "/v1/listings?limit=200").c_str());
-    auction_client_->SetUserAgent("GWToolbox-DropExplorer/1.0");
+    auction_refresh_timer_ = 0.0f;
+    auction_client_ = std::make_unique<AsyncRestClient>();
+    const auto url = std::format("{}/v1/listings?limit=200", base);
+    auction_client_->SetUrl(url.c_str());
+    auction_client_->SetMethod(HttpMethod::Get);
+    auction_client_->SetUserAgent("GWToolbox-AuctionHouseDropFinder/1.0");
     auction_client_->SetConnectTimeoutSec(5);
     auction_client_->SetTimeoutSec(10);
     auction_client_->ExecuteAsync();
@@ -1498,20 +1923,36 @@ void DropExplorerPlugin::RefreshAuctionListings()
     auction_status_ = "Loading listings...";
 }
 
+void DropExplorerPlugin::RefreshMyListings()
+{
+    if (auction_client_ && auction_client_->IsPending()) return;
+    const auto base = GetServiceBaseUrl();
+    if (base.empty() || telemetry_install_id_.empty()) return;
+    auction_client_ = std::make_unique<AsyncRestClient>();
+    const auto url = std::format("{}/v1/listings?limit=200&mine=true&install_id={}",
+        base, PluginUtils::UrlEncode(telemetry_install_id_));
+    auction_client_->SetUrl(url.c_str());
+    auction_client_->SetMethod(HttpMethod::Get);
+    auction_client_->SetUserAgent("GWToolbox-AuctionHouseDropFinder/1.0");
+    auction_client_->SetConnectTimeoutSec(5);
+    auction_client_->SetTimeoutSec(10);
+    auction_client_->ExecuteAsync();
+    auction_request_kind_ = AuctionRequestKind::RefreshMine;
+    auction_status_ = "Loading your listings...";
+}
+
 void DropExplorerPlugin::CreateAuctionListing()
 {
-    if (!auction_client_ || auction_client_->IsPending()) return;
-    const auto base = GetServiceBaseUrl();
     const auto* player_name = GW::PlayerMgr::GetPlayerName();
-    if (base.empty() || !player_name || !*player_name || !auction_item_buf_[0] || !auction_publish_name_confirmed_) {
-        auction_status_ = "Item, server connection, character name, and publishing confirmation are required";
+    if (!player_name || !*player_name || !auction_item_buf_[0] || !auction_publish_name_confirmed_) {
+        auction_status_ = "Item, character name, and publishing confirmation are required";
         return;
     }
     AuctionListingRequest request;
-    request.install_id = telemetry_install_id_;
+    request.install_id = telemetry_install_id_.empty() ? GenerateAnonymousId() : telemetry_install_id_;
     request.seller_name = PluginUtils::WStringToString(player_name);
     request.listing_type = auction_type_idx_ == 0 ? "sell" : "buy";
-    request.item_name = auction_item_buf_;
+    request.item_name = StripXmlTags(auction_item_buf_);
     request.item_model_id = auction_item_model_id_;
     request.quantity = static_cast<uint32_t>(std::max(1, auction_quantity_));
     request.unit_price = static_cast<uint32_t>(std::max(0, auction_unit_price_));
@@ -1522,53 +1963,91 @@ void DropExplorerPlugin::CreateAuctionListing()
         auction_status_ = "Type the requested currency item";
         return;
     }
-    request.notes = auction_notes_buf_;
-    std::vector<std::string> modifier_parts;
-    const auto append_modifier = [&modifier_parts](const char* label, const char* value) {
-        if (value && *value) modifier_parts.emplace_back(std::format("{}: {}", label, value));
-    };
-    const auto& inscriptions = GetAuctionInscriptionOptions();
-    const auto& runes = GetAuctionRuneOptions();
-    const auto& insignias = GetAuctionInsigniaOptions();
-    if (auction_inscription_idx_ > 0 && static_cast<size_t>(auction_inscription_idx_) < inscriptions.size()) append_modifier("Inscription", inscriptions[auction_inscription_idx_].c_str());
-    append_modifier("Weapon prefix", auction_weapon_prefix_buf_);
-    append_modifier("Weapon suffix", auction_weapon_suffix_buf_);
-    if (auction_rune_idx_ > 0 && static_cast<size_t>(auction_rune_idx_) < runes.size()) append_modifier("Rune", runes[auction_rune_idx_].c_str());
-    if (auction_insignia_idx_ > 0 && static_cast<size_t>(auction_insignia_idx_) < insignias.size()) append_modifier("Insignia", insignias[auction_insignia_idx_].c_str());
-    append_modifier(auction_item_from_inventory_ ? "Detected item stats" : "Other requirements", auction_modifiers_buf_);
-    request.modifiers.clear();
-    for (const auto& part : modifier_parts) {
-        if (!request.modifiers.empty()) request.modifiers += " | ";
-        request.modifiers += part;
-    }
+    request.modifiers = StripXmlTags(auction_modifiers_buf_);
     request.duration_hours = static_cast<uint32_t>(std::clamp(auction_duration_hours_, 1, 168));
-    const auto payload = glz::write_json(request).value_or(std::string{});
-    if (payload.empty()) {
-        auction_status_ = "Could not encode listing";
+
+    const auto local_limit = request.listing_type == "sell" ? size_t{30} : size_t{10};
+    const auto pending_count = static_cast<size_t>(std::ranges::count_if(pending_auction_listings_, [&](const PendingAuctionListing& listing) {
+        return listing.request.listing_type == request.listing_type;
+    }));
+    if (pending_count >= local_limit) {
+        auction_status_ = std::format("Local {} queue limit reached ({})", request.listing_type, local_limit);
         return;
     }
-    auction_client_->Clear();
-    auction_client_->SetUrl((base + "/v1/listings").c_str());
+
+    pending_auction_listings_.push_back({std::move(request), static_cast<uint64_t>(std::time(nullptr)) + 300});
+    SavePendingAuctionListings();
+    auction_status_ = std::format("{} queued locally for 5 minutes", auction_type_idx_ == 0 ? "Sell listing" : "Buy order");
+    auction_publish_name_confirmed_ = false;
+    auction_item_buf_[0] = 0;
+    auction_modifiers_buf_[0] = 0;
+    auction_other_currency_buf_[0] = 0;
+    auction_item_model_id_ = 0;
+    auction_quantity_ = 1;
+    auction_currency_idx_ = 0;
+    auction_show_matches_ = false;
+    auction_item_from_inventory_ = false;
+    auction_new_listing_open_ = false;
+}
+
+void DropExplorerPlugin::SendPendingAuctionListing()
+{
+    if (pending_auction_listings_.empty() || auction_request_kind_ != AuctionRequestKind::None ||
+        (auction_client_ && auction_client_->IsPending()) || service_base_url_.empty()) return;
+    const auto now = static_cast<uint64_t>(std::time(nullptr));
+    const auto it = std::ranges::min_element(pending_auction_listings_, {}, &PendingAuctionListing::send_at);
+    if (it == pending_auction_listings_.end() || it->send_at > now) return;
+
+    const auto payload = glz::write_json(it->request).value_or(std::string{});
+    if (payload.empty()) return;
+    pending_auction_inflight_index_ = static_cast<size_t>(std::distance(pending_auction_listings_.begin(), it));
+    auction_client_ = std::make_unique<AsyncRestClient>();
+    auction_client_->SetUrl((service_base_url_ + "/v1/listings").c_str());
     auction_client_->SetMethod(HttpMethod::Post);
     auction_client_->SetHeader("Content-Type", "application/json");
+    auction_client_->SetUserAgent("GWToolbox-AuctionHouseDropFinder/1.0");
     auction_client_->SetPostContent(payload, ContentFlag::Copy);
     auction_client_->SetConnectTimeoutSec(5);
     auction_client_->SetTimeoutSec(10);
     auction_client_->ExecuteAsync();
     auction_request_kind_ = AuctionRequestKind::Create;
-    auction_status_ = "Publishing listing...";
+    auction_status_ = "Publishing locally queued listing...";
+}
+
+void DropExplorerPlugin::LoadPendingAuctionListings()
+{
+    if (settings_folder_.empty()) return;
+    std::ifstream file(std::filesystem::path(settings_folder_) / "pending_auction_listings.json");
+    if (!file.is_open()) return;
+    const std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    PendingAuctionStore store;
+    if (!glz::read_json(store, content)) pending_auction_listings_ = std::move(store.listings);
+}
+
+void DropExplorerPlugin::SavePendingAuctionListings()
+{
+    if (settings_folder_.empty()) return;
+    const auto payload = glz::write_json(PendingAuctionStore{pending_auction_listings_}).value_or(std::string{});
+    if (payload.empty()) return;
+    std::ofstream file(std::filesystem::path(settings_folder_) / "pending_auction_listings.json", std::ios::trunc);
+    if (file.is_open()) file << payload;
 }
 
 void DropExplorerPlugin::CancelAuctionListing(const std::string& listing_id)
 {
-    if (!auction_client_ || auction_client_->IsPending()) return;
+    if (auction_client_ && auction_client_->IsPending()) return;
     const auto base = GetServiceBaseUrl();
     if (base.empty()) return;
-    const auto payload = std::format("{{\"install_id\":\"{}\"}}", telemetry_install_id_);
-    auction_client_->Clear();
-    auction_client_->SetUrl((base + "/v1/listings/" + listing_id).c_str());
+
+    const auto install_id = telemetry_install_id_.empty() ? GenerateAnonymousId() : telemetry_install_id_;
+    const auto payload = std::format("{{\"listing_id\":\"{}\",\"install_id\":\"{}\"}}", listing_id, install_id);
+
+    auction_client_ = std::make_unique<AsyncRestClient>();
+    const auto url = listing_id.empty() ? (base + "/v1/listings") : (base + "/v1/listings/" + listing_id);
+    auction_client_->SetUrl(url.c_str());
     auction_client_->SetMethod("DELETE");
     auction_client_->SetHeader("Content-Type", "application/json");
+    auction_client_->SetUserAgent("GWToolbox-AuctionHouseDropFinder/1.0");
     auction_client_->SetPostContent(payload, ContentFlag::Copy);
     auction_client_->SetConnectTimeoutSec(5);
     auction_client_->SetTimeoutSec(10);
@@ -1586,24 +2065,25 @@ void DropExplorerPlugin::UpdateAuctionRequest(const float delta)
         auction_item_name_decoder_.reset();
     }
     if (auction_item_details_decoder_ && !auction_item_details_decoder_->IsDecoding()) {
-        const auto details = StripXmlTags(auction_item_details_decoder_->string());
-        if (!details.empty()) {
-            PluginUtils::StrCopy(auction_modifiers_buf_, details.c_str(), IM_ARRAYSIZE(auction_modifiers_buf_));
-            const auto select_detected = [&details](const std::vector<std::string>& options, int& selected) {
-                selected = 0;
-                for (size_t i = 1; i < options.size(); ++i) {
-                    if (!CaseInsensitiveContains(details, options[i])) continue;
-                    selected = static_cast<int>(i);
-                    break;
-                }
-            };
-            select_detected(GetAuctionInscriptionOptions(), auction_inscription_idx_);
-            select_detected(GetAuctionRuneOptions(), auction_rune_idx_);
-            select_detected(GetAuctionInsigniaOptions(), auction_insignia_idx_);
+        const auto raw_details = StripXmlTags(auction_item_details_decoder_->string());
+        if (!raw_details.empty()) {
+            std::stringstream ss(raw_details);
+            std::string line;
+            std::string clean_details;
+            while (std::getline(ss, line)) {
+                while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+                while (!line.empty() && line.front() == ' ') line.erase(line.begin());
+                if (line.empty() || line.find("Value:") == 0) continue;
+                if (!clean_details.empty()) clean_details.push_back('\n');
+                clean_details += line;
+            }
+            PluginUtils::StrCopy(auction_modifiers_buf_, clean_details.c_str(), IM_ARRAYSIZE(auction_modifiers_buf_));
         }
         auction_item_details_decoder_.reset();
     }
     if (auction_request_kind_ == AuctionRequestKind::None) {
+        SendPendingAuctionListing();
+        if (auction_request_kind_ != AuctionRequestKind::None) return;
         if (auction_refresh_timer_ >= 60.0f) RefreshAuctionListings();
         return;
     }
@@ -1611,43 +2091,62 @@ void DropExplorerPlugin::UpdateAuctionRequest(const float delta)
     const auto completed_kind = auction_request_kind_;
     auction_request_kind_ = AuctionRequestKind::None;
     const auto successful = auction_client_->IsSuccessful();
-    if (successful && completed_kind == AuctionRequestKind::Refresh) {
-        AuctionListingsDocument document;
-        if (!glz::read_json(document, auction_client_->GetContent()) && document.schema_version == 2) {
-            auction_listings_ = std::move(document.listings);
-            auction_status_ = std::format("{} active listings", auction_listings_.size());
-            auction_refresh_timer_ = 0.0f;
+    if (completed_kind == AuctionRequestKind::Refresh) {
+        auction_refresh_timer_ = 0.0f;
+        if (successful) {
+            AuctionListingsDocument document;
+            if (!glz::read_json(document, auction_client_->GetContent()) && document.schema_version == 2) {
+                auction_listings_ = std::move(document.listings);
+                auction_status_ = std::format("{} active listings", auction_listings_.size());
+                RefreshMyListings();
+            }
+            else {
+                auction_status_ = "Server returned an invalid listing document";
+            }
         }
         else {
-            auction_status_ = "Server returned an invalid listing document";
+            discovery_next_ms_ = 0;
+            auction_status_ = std::format("Failed to load listings (HTTP {}); reconnecting", auction_client_->GetStatusCode());
+        }
+    }
+    else if (completed_kind == AuctionRequestKind::RefreshMine) {
+        if (successful) {
+            AuctionListingsDocument document;
+            if (!glz::read_json(document, auction_client_->GetContent()) && document.schema_version == 2) {
+                my_auction_listings_ = std::move(document.listings);
+                auction_status_ = std::format("{} active listings; {} yours", auction_listings_.size(), my_auction_listings_.size());
+            }
+            else {
+                auction_status_ = "Server returned an invalid account listing document";
+            }
+        }
+        else {
+            discovery_next_ms_ = 0;
+            auction_status_ = std::format("Failed to load your listings (HTTP {}); reconnecting", auction_client_->GetStatusCode());
         }
     }
     else if (successful && completed_kind == AuctionRequestKind::Create) {
         auction_status_ = "Listing published";
-        auction_publish_name_confirmed_ = false;
-        auction_item_buf_[0] = 0;
-        auction_notes_buf_[0] = 0;
-        auction_modifiers_buf_[0] = 0;
-        auction_weapon_prefix_buf_[0] = 0;
-        auction_weapon_suffix_buf_[0] = 0;
-        auction_inscription_idx_ = 0;
-        auction_rune_idx_ = 0;
-        auction_insignia_idx_ = 0;
-        auction_other_currency_buf_[0] = 0;
-        auction_item_model_id_ = 0;
-        auction_quantity_ = 1;
-        auction_currency_idx_ = 0;
-        auction_show_matches_ = false;
-        auction_item_from_inventory_ = false;
+        if (pending_auction_inflight_index_ < pending_auction_listings_.size()) {
+            pending_auction_listings_.erase(pending_auction_listings_.begin() + static_cast<ptrdiff_t>(pending_auction_inflight_index_));
+            SavePendingAuctionListings();
+        }
+        pending_auction_inflight_index_ = static_cast<size_t>(-1);
+        RefreshAuctionListings();
     }
     else if (successful && completed_kind == AuctionRequestKind::Cancel) {
         auction_status_ = "Listing cancelled";
+        RefreshAuctionListings();
     }
     else {
+        discovery_next_ms_ = 0;
+        if (completed_kind == AuctionRequestKind::Create && pending_auction_inflight_index_ < pending_auction_listings_.size()) {
+            pending_auction_listings_[pending_auction_inflight_index_].send_at = static_cast<uint64_t>(std::time(nullptr)) + 30;
+            SavePendingAuctionListings();
+            pending_auction_inflight_index_ = static_cast<size_t>(-1);
+        }
         auction_status_ = std::format("Auction request failed (HTTP {})", auction_client_->GetStatusCode());
     }
-    auction_client_->Clear();
-    if (successful && completed_kind != AuctionRequestKind::Refresh) RefreshAuctionListings();
 }
 
 void DropExplorerPlugin::PrefillAuctionItem(const GW::Item* item)
@@ -1655,45 +2154,336 @@ void DropExplorerPlugin::PrefillAuctionItem(const GW::Item* item)
     if (!item) return;
     auction_item_model_id_ = item->model_id;
     auction_quantity_ = std::max<int>(1, item->quantity);
+    auction_unit_price_ = 0;
     auction_type_idx_ = 0;
     auction_item_buf_[0] = 0;
     auction_modifiers_buf_[0] = 0;
-    auction_weapon_prefix_buf_[0] = 0;
-    auction_weapon_suffix_buf_[0] = 0;
-    auction_inscription_idx_ = 0;
-    auction_rune_idx_ = 0;
-    auction_insignia_idx_ = 0;
-    auction_equipment_type_idx_ = 0;
-    switch (item->type) {
-        case GW::Constants::ItemType::Axe:
-        case GW::Constants::ItemType::Bow:
-        case GW::Constants::ItemType::Daggers:
-        case GW::Constants::ItemType::Hammer:
-        case GW::Constants::ItemType::Offhand:
-        case GW::Constants::ItemType::Scythe:
-        case GW::Constants::ItemType::Shield:
-        case GW::Constants::ItemType::Spear:
-        case GW::Constants::ItemType::Staff:
-        case GW::Constants::ItemType::Sword:
-        case GW::Constants::ItemType::Wand:
-            auction_equipment_type_idx_ = 1;
-            break;
-        case GW::Constants::ItemType::Boots:
-        case GW::Constants::ItemType::Chestpiece:
-        case GW::Constants::ItemType::Gloves:
-        case GW::Constants::ItemType::Headpiece:
-        case GW::Constants::ItemType::Leggings:
-            auction_equipment_type_idx_ = 2;
-            break;
-        default:
-            break;
-    }
     auction_show_matches_ = false;
     auction_item_from_inventory_ = true;
-    auction_item_name_decoder_ = std::make_unique<PluginUtils::EncString>(
-        item->single_item_name && *item->single_item_name ? item->single_item_name : item->name_enc, true);
+    auction_new_listing_open_ = true;
+    current_tab_ = 0;
+    auction_focus_requested_ = true;
+
+    SetLinkerFocusedItem(item);
+
+    const auto* name_enc = item->complete_name_enc && *item->complete_name_enc ? item->complete_name_enc :
+        (item->single_item_name && *item->single_item_name ? item->single_item_name : item->name_enc);
+    if (name_enc && *name_enc) {
+        auction_item_name_decoder_ = std::make_unique<PluginUtils::EncString>(name_enc, true);
+    }
     if (item->info_string && *item->info_string) {
         auction_item_details_decoder_ = std::make_unique<PluginUtils::EncString>(item->info_string, true);
+    }
+}
+
+void DropExplorerPlugin::PrefillAuctionFromLinker(const LinkerDecodeState& state)
+{
+    auction_item_model_id_ = state.model_id;
+    auction_quantity_ = std::max<int>(1, state.quantity);
+    auction_unit_price_ = 0;
+    auction_type_idx_ = 0;
+    const auto clean_name = StripXmlTags(state.name_done ? state.name : "Item");
+    PluginUtils::StrCopy(auction_item_buf_, clean_name.c_str(), IM_ARRAYSIZE(auction_item_buf_));
+
+    std::string clean_mods;
+    if (state.stats_done) {
+        std::stringstream ss(StripXmlTags(state.stats));
+        std::string line;
+        while (std::getline(ss, line)) {
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+            while (!line.empty() && line.front() == ' ') line.erase(line.begin());
+            if (line.empty() || line.find("Value:") == 0) continue;
+            if (!clean_mods.empty()) clean_mods.push_back('\n');
+            clean_mods += line;
+        }
+    }
+    PluginUtils::StrCopy(auction_modifiers_buf_, clean_mods.c_str(), IM_ARRAYSIZE(auction_modifiers_buf_));
+    auction_item_from_inventory_ = true;
+    auction_show_matches_ = false;
+    current_tab_ = 0;
+    auction_focus_requested_ = true;
+}
+
+void DropExplorerPlugin::SetLinkerFocusedItem(const GW::Item* item)
+{
+    if (!item || !item->item_id) return;
+    if (linker_decode_state_ && linker_decode_state_->item_id == item->item_id) return;
+
+    if (linker_decode_state_) {
+        linker_decode_state_->cancelled = true;
+    }
+
+    auto state = std::make_shared<LinkerDecodeState>();
+    state->item_id = item->item_id;
+    state->model_id = item->model_id;
+    state->quantity = item->quantity;
+    state->value = item->value;
+    state->type = item->type;
+    state->rarity = GetLinkerItemRarity(item);
+    linker_decode_state_ = state;
+
+    const auto* enc_name = item->complete_name_enc && *item->complete_name_enc ? item->complete_name_enc : item->name_enc;
+    if (enc_name && *enc_name) {
+        GW::UI::AsyncDecodeStr(enc_name, [](void* param, const wchar_t* s) {
+            auto* ctx = static_cast<std::shared_ptr<LinkerDecodeState>*>(param);
+            if (ctx && *ctx) {
+                auto st = *ctx;
+                if (!st->cancelled && s) {
+                    st->name = StripXmlTags(PluginUtils::WStringToString(s));
+                    st->name_done = true;
+                    auto* plugin = static_cast<DropExplorerPlugin*>(ToolboxPluginInstance());
+                    if (plugin) {
+                        plugin->TriggerLinkerPendingSendIfReady(st);
+                        if (plugin->auction_item_from_inventory_ && plugin->auction_item_buf_[0] == 0) {
+                            PluginUtils::StrCopy(plugin->auction_item_buf_, st->name.c_str(), IM_ARRAYSIZE(plugin->auction_item_buf_));
+                        }
+                    }
+                }
+            }
+            delete ctx;
+        }, new std::shared_ptr<LinkerDecodeState>(state));
+    }
+    else {
+        state->name = "Item";
+        state->name_done = true;
+    }
+
+    if (item->info_string && *item->info_string) {
+        GW::UI::AsyncDecodeStr(item->info_string, [](void* param, const wchar_t* s) {
+            auto* ctx = static_cast<std::shared_ptr<LinkerDecodeState>*>(param);
+            if (ctx && *ctx) {
+                auto st = *ctx;
+                if (!st->cancelled && s) {
+                    st->stats = StripXmlTags(PluginUtils::WStringToString(s));
+                    st->stats_done = true;
+                    auto* plugin = static_cast<DropExplorerPlugin*>(ToolboxPluginInstance());
+                    if (plugin) {
+                        plugin->TriggerLinkerPendingSendIfReady(st);
+                        if (plugin->auction_item_from_inventory_ && plugin->auction_modifiers_buf_[0] == 0) {
+                            std::stringstream ss(st->stats);
+                            std::string line;
+                            std::string clean_details;
+                            while (std::getline(ss, line)) {
+                                while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+                                while (!line.empty() && line.front() == ' ') line.erase(line.begin());
+                                if (line.empty() || line.find("Value:") == 0) continue;
+                                if (!clean_details.empty()) clean_details.push_back('\n');
+                                clean_details += line;
+                            }
+                            PluginUtils::StrCopy(plugin->auction_modifiers_buf_, clean_details.c_str(), IM_ARRAYSIZE(plugin->auction_modifiers_buf_));
+                        }
+                    }
+                }
+            }
+            delete ctx;
+        }, new std::shared_ptr<LinkerDecodeState>(state));
+    }
+    else {
+        state->stats_done = true;
+    }
+}
+
+std::vector<std::string> DropExplorerPlugin::BuildLinkerChatLines(const std::string& name_raw, const std::string& stats_raw, const uint32_t quantity, const std::string& note)
+{
+    std::vector<std::string> lines;
+    const auto clean_name = CleanRawText(name_raw.empty() ? "Item" : name_raw);
+    const auto item_tag = (quantity > 1)
+        ? std::format("[x{}] [{}]", quantity, clean_name)
+        : std::format("[{}]", clean_name);
+
+    std::vector<std::string> tokens;
+    std::stringstream ss(CleanRawText(stats_raw));
+    std::string line_item;
+    while (std::getline(ss, line_item)) {
+        while (!line_item.empty() && (line_item.back() == '\r' || line_item.back() == ' ')) line_item.pop_back();
+        while (!line_item.empty() && line_item.front() == ' ') line_item.erase(line_item.begin());
+        if (line_item.empty()) continue;
+        if (line_item.find("Value:") == 0) continue;
+        tokens.push_back(line_item);
+    }
+
+    const auto clean_note = CleanRawText(note);
+    if (!clean_note.empty()) tokens.push_back(clean_note);
+
+    if (tokens.empty()) {
+        lines.push_back(item_tag);
+        return lines;
+    }
+
+    std::string current_line = item_tag;
+    for (const auto& t : tokens) {
+        const auto candidate = current_line + " | " + t;
+        if (candidate.length() > 112 && current_line != item_tag) {
+            lines.push_back(current_line);
+            current_line = item_tag + " " + t;
+        }
+        else {
+            current_line = candidate;
+        }
+    }
+    if (!current_line.empty()) {
+        if (current_line.length() > 118) current_line = current_line.substr(0, 115) + "...";
+        lines.push_back(current_line);
+    }
+    return lines;
+}
+
+void DropExplorerPlugin::DispatchChatLine(const char channel, const std::string& message, const std::string& whisper_target)
+{
+    if (message.empty()) return;
+    const auto wmsg = PluginUtils::StringToWString(message);
+    if (!whisper_target.empty()) {
+        const auto wtarget = PluginUtils::StringToWString(whisper_target);
+        GW::Chat::SendChat(wtarget.c_str(), wmsg.c_str());
+    }
+    else {
+        GW::Chat::SendChat(channel, wmsg.c_str());
+    }
+}
+
+void DropExplorerPlugin::LinkItem(const GW::Item* item, const int channel_index, const std::string& note)
+{
+    if (!item || !item->item_id) return;
+    SetLinkerFocusedItem(item);
+
+    auto state = linker_decode_state_;
+    if (!state) return;
+
+    state->pending_link_channel = channel_index;
+    state->pending_link_note = note;
+    state->pending_link_whisper = (channel_index == 5) ? linker_whisper_target_buf_ : "";
+
+    if (state->name_done && state->stats_done) {
+        const auto lines = BuildLinkerChatLines(state->name, state->stats, state->quantity, state->pending_link_note);
+        const auto channel = GetChannelChar(channel_index);
+        for (const auto& line : lines) {
+            DispatchChatLine(channel, line, state->pending_link_whisper);
+        }
+    }
+    else {
+        state->should_send_when_ready = true;
+    }
+}
+
+void DropExplorerPlugin::LinkItemById(const uint32_t item_id, const int channel_index)
+{
+    const auto* item = GW::Items::GetItemById(item_id);
+    if (item) LinkItem(item, channel_index, linker_custom_note_buf_);
+}
+
+void DropExplorerPlugin::TriggerLinkerPendingSendIfReady(const std::shared_ptr<LinkerDecodeState>& state)
+{
+    if (!state || state->cancelled || !state->should_send_when_ready) return;
+    if (!state->name_done || !state->stats_done) return;
+    state->should_send_when_ready = false;
+
+    GW::GameThread::Enqueue([this, state]() {
+        if (state->cancelled) return;
+        const auto lines = BuildLinkerChatLines(state->name, state->stats, state->quantity, state->pending_link_note);
+        const auto ch = GetChannelChar(state->pending_link_channel);
+        for (const auto& line : lines) {
+            DispatchChatLine(ch, line, state->pending_link_whisper);
+        }
+    });
+}
+
+void DropExplorerPlugin::DrawItemLinkerView()
+{
+    if (linker_waiting_for_item_) {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.45f, 0.1f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.55f, 0.15f, 1.0f));
+        if (ImGui::Button("Waiting for item (Right-click an item in bags)... [Cancel]##Linker")) {
+            linker_waiting_for_item_ = false;
+        }
+        ImGui::PopStyleColor(2);
+    }
+    else {
+        if (ImGui::Button("Inspect Selected Item")) {
+            linker_waiting_for_item_ = true;
+            auction_waiting_for_item_ = false;
+        }
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled(linker_waiting_for_item_ ? "Right-click any item in your inventory to inspect" : "Press, then right-click an inventory item");
+
+    ImGui::Separator();
+
+    auto state = linker_decode_state_;
+    if (!state || !state->item_id) {
+        ImGui::TextDisabled("Click any item in your bags or equipment to inspect and link.");
+        return;
+    }
+
+    const auto name = state->name_done ? StripXmlTags(state->name) : "Decoding name...";
+    ImGui::TextColored(GetLinkerRarityColor(state->rarity), "%s", name.c_str());
+
+    ImGui::TextDisabled("%s | Quantity: %u | Value: %ug",
+        GetLinkerRarityName(state->rarity), state->quantity, state->value);
+
+    ImGui::SameLine();
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.55f, 0.25f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.7f, 0.3f, 1.0f));
+    if (ImGui::Button("List in Auction House (Tab 0)")) {
+        PrefillAuctionFromLinker(*state);
+    }
+    ImGui::PopStyleColor(2);
+
+    ImGui::Spacing();
+    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Item Stats & Modifiers:");
+    ImGui::BeginChild("LinkerStatsBox", ImVec2(0.0f, 95.0f), true);
+    if (!state->stats_done) {
+        ImGui::TextDisabled("Decoding item stats...");
+    }
+    else if (state->stats.empty()) {
+        ImGui::TextDisabled("No stats or modifiers.");
+    }
+    else {
+        std::stringstream ss(CleanRawText(state->stats));
+        std::string line;
+        while (std::getline(ss, line)) {
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+            if (!line.empty() && line.find("Value:") != 0) {
+                ImGui::BulletText("%s", line.c_str());
+            }
+        }
+    }
+    ImGui::EndChild();
+
+    ImGui::Spacing();
+    ImGui::InputText("Note/Offer##LinkerNote", linker_custom_note_buf_, sizeof(linker_custom_note_buf_));
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Clear##LinkerClear")) linker_custom_note_buf_[0] = '\0';
+
+    const auto preview_lines = BuildLinkerChatLines(state->name_done ? state->name : "Item", state->stats, state->quantity, linker_custom_note_buf_);
+    ImGui::TextColored(ImVec4(0.85f, 0.85f, 0.85f, 1.0f), "Chat Preview (%zu line%s):",
+        preview_lines.size(), preview_lines.size() == 1 ? "" : "s");
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.9f, 1.0f, 1.0f));
+    for (const auto& l : preview_lines) {
+        ImGui::TextWrapped("%s", l.c_str());
+    }
+    ImGui::PopStyleColor();
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Text("One-Click Link to Channel:");
+
+    const float btn_w = (ImGui::GetContentRegionAvail().x - 16.0f) / 5.0f;
+    if (ImGui::Button("Party\n(#)##LinkParty", ImVec2(btn_w, 36.0f))) LinkItemById(state->item_id, 0);
+    ImGui::SameLine();
+    if (ImGui::Button("Guild\n(@)##LinkGuild", ImVec2(btn_w, 36.0f))) LinkItemById(state->item_id, 1);
+    ImGui::SameLine();
+    if (ImGui::Button("Trade\n($)##LinkTrade", ImVec2(btn_w, 36.0f))) LinkItemById(state->item_id, 2);
+    ImGui::SameLine();
+    if (ImGui::Button("All\n(!)##LinkAll", ImVec2(btn_w, 36.0f))) LinkItemById(state->item_id, 3);
+    ImGui::SameLine();
+    if (ImGui::Button("Ally\n(%)##LinkAlly", ImVec2(btn_w, 36.0f))) LinkItemById(state->item_id, 4);
+
+    ImGui::Spacing();
+    ImGui::SetNextItemWidth(130.0f);
+    ImGui::InputText("##LinkerWhisperTarget", linker_whisper_target_buf_, sizeof(linker_whisper_target_buf_));
+    ImGui::SameLine();
+    if (ImGui::Button("Send Whisper##LinkerWhisper") && linker_whisper_target_buf_[0] != '\0') {
+        LinkItemById(state->item_id, 5);
     }
 }
 
@@ -1701,21 +2491,48 @@ bool __cdecl DropExplorerPlugin::DrawInventoryContextMenuEntry(const uint32_t it
 {
     const auto* item = GW::Items::GetItemById(item_id);
     if (!item || !item->bag || !item->bag->IsInventoryBag()) return true;
-    const auto open_listing = [item](const int listing_type) {
-        auto* plugin = static_cast<DropExplorerPlugin*>(ToolboxPluginInstance());
-        plugin->PrefillAuctionItem(item);
-        plugin->auction_type_idx_ = listing_type;
-        plugin->auction_focus_requested_ = true;
-        plugin->current_tab_ = 2;
-        if (const auto visible = plugin->GetVisiblePtr()) *visible = true;
-        ImGui::SetWindowCollapsed(plugin->Name(), false);
-    };
-    if (ImGui::Button("List in Auction House", ImVec2(width, 0.0f))) {
-        open_listing(0);
+    auto* plugin = static_cast<DropExplorerPlugin*>(ToolboxPluginInstance());
+    if (!plugin) return true;
+
+    if (GetTickCount64() <= plugin->dismiss_inventory_context_menu_until_) {
+        plugin->dismiss_inventory_context_menu_until_ = 0;
         return false;
     }
-    if (ImGui::Button("Create Auction Buy Order", ImVec2(width, 0.0f))) {
-        open_listing(1);
+
+    if (plugin->linker_waiting_for_item_) {
+        plugin->linker_waiting_for_item_ = false;
+        plugin->SetLinkerFocusedItem(item);
+        plugin->linker_focus_requested_ = true;
+        plugin->current_tab_ = 1;
+        return false;
+    }
+    if (plugin->auction_waiting_for_item_) {
+        plugin->auction_waiting_for_item_ = false;
+        plugin->PrefillAuctionItem(item);
+        plugin->auction_focus_requested_ = true;
+        plugin->current_tab_ = 0;
+        return false;
+    }
+
+    if (ImGui::Button("List in Auction House", ImVec2(width, 0.0f))) {
+        plugin->PrefillAuctionItem(item);
+        plugin->auction_type_idx_ = 0;
+        plugin->auction_focus_requested_ = true;
+        plugin->current_tab_ = 0;
+        if (const auto visible = plugin->GetVisiblePtr()) *visible = true;
+        ImGui::SetWindowCollapsed(plugin->Name(), false);
+        return false;
+    }
+    if (ImGui::Button("Link Item to Chat", ImVec2(width, 0.0f))) {
+        plugin->LinkItem(item, 2, plugin->linker_custom_note_buf_);
+        return false;
+    }
+    if (ImGui::Button("Inspect in Item Linker", ImVec2(width, 0.0f))) {
+        plugin->SetLinkerFocusedItem(item);
+        plugin->linker_focus_requested_ = true;
+        plugin->current_tab_ = 1;
+        if (const auto visible = plugin->GetVisiblePtr()) *visible = true;
+        ImGui::SetWindowCollapsed(plugin->Name(), false);
         return false;
     }
     return true;
@@ -1724,125 +2541,588 @@ bool __cdecl DropExplorerPlugin::DrawInventoryContextMenuEntry(const uint32_t it
 void DropExplorerPlugin::DrawAuctionHouseView()
 {
     if (auction_refresh_timer_ >= 60.0f && auction_request_kind_ == AuctionRequestKind::None) RefreshAuctionListings();
-    ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f), "Player Auction House");
+    ImGui::TextColored(ImVec4(1.0f, 0.82f, 0.25f, 1.0f), "PLAYER AUCTION HOUSE");
+    ImGui::TextDisabled("Browse community buy orders and sell listings");
+    ImGui::Spacing();
+    if (ImGui::Button(auction_new_listing_open_ ? "Close New Listing" : "New Listing")) {
+        auction_new_listing_open_ = !auction_new_listing_open_;
+        if (!auction_new_listing_open_) auction_waiting_for_item_ = false;
+    }
     ImGui::SameLine();
-    if (ImGui::SmallButton("Refresh")) RefreshAuctionListings();
+    if (ImGui::Button("Refresh Listings")) RefreshAuctionListings();
     ImGui::SameLine();
     ImGui::TextDisabled("%s", auction_status_.c_str());
-    ImGui::TextWrapped("Listings arrange player-to-player contact only. Clicking Contact sends an in-game whisper; the plugin never transfers items or currency.");
-    ImGui::Separator();
 
-    const char* listing_types[] = {"Sell", "Buy Order"};
-    ImGui::SetNextItemWidth(260.0f);
-    ImGui::Combo("Listing type", &auction_type_idx_, listing_types, IM_ARRAYSIZE(listing_types));
-    ImGui::TextUnformatted("Item");
-    ImGui::SetNextItemWidth(-1.0f);
-    if (ImGui::InputTextWithHint("##AuctionItem", "Type an item name", auction_item_buf_, IM_ARRAYSIZE(auction_item_buf_))) {
-        auction_show_matches_ = auction_item_buf_[0] != 0;
-        auction_item_from_inventory_ = false;
-        auction_item_model_id_ = 0;
-    }
-    if (auction_show_matches_ && auction_item_buf_[0]) {
-        auto shown = 0;
-        if (ImGui::BeginChild("##AuctionMatches", ImVec2(0.0f, ImGui::GetTextLineHeightWithSpacing() * 4.0f), true)) {
-            std::unordered_set<std::string> names;
-            for (const auto& item : item_index_) {
-                if (shown >= 40 || !CaseInsensitiveContains(item.item_name, auction_item_buf_) || !names.emplace(ToLower(item.item_name)).second) continue;
-                if (ImGui::Selectable(item.item_name.c_str())) {
-                    PluginUtils::StrCopy(auction_item_buf_, item.item_name.c_str(), IM_ARRAYSIZE(auction_item_buf_));
-                    auction_item_model_id_ = 0;
-                    auction_show_matches_ = false;
-                }
-                ++shown;
-            }
+    ImGui::BeginChild("AuctionHousePolicy", ImVec2(0.0f, 62.0f), true);
+    ImGui::TextColored(ImVec4(0.45f, 0.85f, 1.0f, 1.0f), "Player-to-player marketplace");
+    ImGui::TextWrapped("Listings arrange contact only; the plugin never transfers items or currency. New orders remain local for 5 minutes before publishing. Limits: 30 sell listings and 10 buy orders per account.");
+    ImGui::EndChild();
+
+    if (auction_new_listing_open_) {
+        ImGui::Spacing();
+        ImGui::BeginChild("NewAuctionListing", ImVec2(0.0f, 345.0f), true);
+        ImGui::TextColored(ImVec4(1.0f, 0.82f, 0.25f, 1.0f), "CREATE A NEW LISTING");
+        ImGui::TextDisabled("Complete the details below. Your listing enters a cancellable 5-minute local queue.");
+        ImGui::Separator();
+
+        if (auction_waiting_for_item_) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.45f, 0.1f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.55f, 0.15f, 1.0f));
+            if (ImGui::Button("Waiting for inventory item - click to cancel##Auction")) auction_waiting_for_item_ = false;
+            ImGui::PopStyleColor(2);
         }
+        else if (ImGui::Button("Select From Inventory##Auction")) {
+            auction_waiting_for_item_ = true;
+            linker_waiting_for_item_ = false;
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled(auction_waiting_for_item_ ? "Right-click an item in your bags" : "Automatically fills the item and its modifiers");
+
+        const char* listing_types[] = {"Sell listing", "Buy order"};
+        const char* currencies[] = {"Gold", "Platinum", "Armbraces of Truth", "Globs of Ectoplasm", "Other item"};
+        if (ImGui::BeginTable("NewListingFields", 2, ImGuiTableFlags_SizingStretchProp)) {
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted("Order type");
+            ImGui::SetNextItemWidth(-1.0f);
+            ImGui::Combo("##AuctionListingType", &auction_type_idx_, listing_types, IM_ARRAYSIZE(listing_types));
+            ImGui::TextUnformatted("Item");
+            ImGui::SetNextItemWidth(-1.0f);
+            if (ImGui::InputTextWithHint("##AuctionItem", "Type an item name", auction_item_buf_, IM_ARRAYSIZE(auction_item_buf_))) {
+                auction_show_matches_ = auction_item_buf_[0] != 0;
+                auction_item_from_inventory_ = false;
+                auction_item_model_id_ = 0;
+            }
+            if (auction_show_matches_ && auction_item_buf_[0]) {
+                auto shown = 0;
+                if (ImGui::BeginChild("##AuctionMatches", ImVec2(0.0f, ImGui::GetTextLineHeightWithSpacing() * 3.0f), true)) {
+                    std::unordered_set<std::string> names;
+                    for (const auto& item : item_index_) {
+                        if (shown >= 40 || !CaseInsensitiveContains(item.item_name, auction_item_buf_) || !names.emplace(ToLower(item.item_name)).second) continue;
+                        if (ImGui::Selectable(item.item_name.c_str())) {
+                            PluginUtils::StrCopy(auction_item_buf_, item.item_name.c_str(), IM_ARRAYSIZE(auction_item_buf_));
+                            auction_item_model_id_ = 0;
+                            auction_show_matches_ = false;
+                        }
+                        ++shown;
+                    }
+                }
+                ImGui::EndChild();
+            }
+            ImGui::TextUnformatted("Quantity");
+            ImGui::SetNextItemWidth(-1.0f);
+            ImGui::InputInt("##AuctionQuantity", &auction_quantity_);
+
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted("Payment currency");
+            ImGui::SetNextItemWidth(-1.0f);
+            ImGui::Combo("##AuctionCurrency", &auction_currency_idx_, currencies, IM_ARRAYSIZE(currencies));
+            if (auction_currency_idx_ == 4) {
+                ImGui::TextUnformatted("Currency item");
+                ImGui::SetNextItemWidth(-1.0f);
+                ImGui::InputTextWithHint("##AuctionOtherCurrency", "Exact item name", auction_other_currency_buf_, IM_ARRAYSIZE(auction_other_currency_buf_));
+            }
+            ImGui::TextUnformatted("Price per item");
+            ImGui::SetNextItemWidth(-1.0f);
+            ImGui::InputInt("##AuctionUnitPrice", &auction_unit_price_);
+            ImGui::TextUnformatted("Listing duration (hours)");
+            ImGui::SetNextItemWidth(-1.0f);
+            ImGui::InputInt("##AuctionDuration", &auction_duration_hours_);
+            ImGui::EndTable();
+        }
+
+        ImGui::TextUnformatted("Item stats and modifiers");
+        ImGui::InputTextMultiline("##AuctionModifiers", auction_modifiers_buf_, IM_ARRAYSIZE(auction_modifiers_buf_), ImVec2(-1.0f, 58.0f));
+        ImGui::Checkbox("Publish my current character name so buyers or sellers can whisper me", &auction_publish_name_confirmed_);
+        if (!auction_publish_name_confirmed_) ImGui::BeginDisabled();
+        if (ImGui::Button("Queue Listing for Publication")) CreateAuctionListing();
+        if (!auction_publish_name_confirmed_) ImGui::EndDisabled();
         ImGui::EndChild();
     }
-    ImGui::InputInt("Quantity", &auction_quantity_);
-    ImGui::InputInt("Price amount (per item)", &auction_unit_price_);
-    const char* currencies[] = {"Gold", "Platinum", "Armbraces of Truth", "Globs of Ectoplasm", "Other item"};
-    ImGui::SetNextItemWidth(260.0f);
-    ImGui::Combo("Payment currency", &auction_currency_idx_, currencies, IM_ARRAYSIZE(currencies));
-    if (auction_currency_idx_ == 4) {
-        ImGui::InputTextWithHint("Other payment item", "Type the exact item name", auction_other_currency_buf_, IM_ARRAYSIZE(auction_other_currency_buf_));
-    }
-    ImGui::InputInt("Duration (hours)", &auction_duration_hours_);
-    const char* equipment_types[] = {"Not equipment", "Weapon / offhand", "Armor"};
-    ImGui::SetNextItemWidth(260.0f);
-    ImGui::Combo("Equipment type", &auction_equipment_type_idx_, equipment_types, IM_ARRAYSIZE(equipment_types));
-    const auto draw_modifier_combo = [](const char* label, const std::vector<std::string>& options, int& selected) {
-        selected = std::clamp(selected, 0, static_cast<int>(options.size()) - 1);
-        ImGui::SetNextItemWidth(320.0f);
-        if (!ImGui::BeginCombo(label, options[selected].c_str())) return;
-        for (size_t i = 0; i < options.size(); ++i) {
-            const auto is_selected = selected == static_cast<int>(i);
-            if (ImGui::Selectable(options[i].c_str(), is_selected)) selected = static_cast<int>(i);
-            if (is_selected) ImGui::SetItemDefaultFocus();
-        }
-        ImGui::EndCombo();
-    };
-    if (auction_equipment_type_idx_ == 1) {
-        ImGui::SeparatorText("Weapon modifiers");
-        draw_modifier_combo("Inscription", GetAuctionInscriptionOptions(), auction_inscription_idx_);
-        ImGui::InputTextWithHint("Prefix upgrade", "e.g. Sundering, Vampiric, Fiery", auction_weapon_prefix_buf_, IM_ARRAYSIZE(auction_weapon_prefix_buf_));
-        ImGui::InputTextWithHint("Suffix upgrade", "e.g. Fortitude, Enchanting", auction_weapon_suffix_buf_, IM_ARRAYSIZE(auction_weapon_suffix_buf_));
-    }
-    else if (auction_equipment_type_idx_ == 2) {
-        ImGui::SeparatorText("Armor modifiers");
-        draw_modifier_combo("Insignia", GetAuctionInsigniaOptions(), auction_insignia_idx_);
-        draw_modifier_combo("Rune", GetAuctionRuneOptions(), auction_rune_idx_);
-    }
-    ImGui::TextUnformatted(auction_item_from_inventory_ ? "Detected item stats and modifiers" : "Other modifier requirements");
-    ImGui::InputTextMultiline("##AuctionModifiers", auction_modifiers_buf_, IM_ARRAYSIZE(auction_modifiers_buf_), ImVec2(-1.0f, 58.0f));
-    if (auction_item_from_inventory_ && !auction_modifiers_buf_[0] && !auction_item_details_decoder_) {
-        ImGui::TextDisabled("No readable modifiers found. The item may need to be identified.");
-    }
-    ImGui::TextUnformatted("Listing notes");
-    ImGui::InputTextMultiline("##AuctionNotes", auction_notes_buf_, IM_ARRAYSIZE(auction_notes_buf_), ImVec2(-1.0f, 42.0f));
-    ImGui::Checkbox("Publish my current character name so buyers/sellers can whisper me", &auction_publish_name_confirmed_);
-    if (!auction_publish_name_confirmed_) ImGui::BeginDisabled();
-    if (ImGui::Button("Publish Listing")) CreateAuctionListing();
-    if (!auction_publish_name_confirmed_) ImGui::EndDisabled();
 
-    ImGui::Separator();
-    ImGui::InputTextWithHint("##AuctionSearch", "Filter active listings", auction_search_buf_, IM_ARRAYSIZE(auction_search_buf_));
-    const auto* own_name_w = GW::PlayerMgr::GetPlayerName();
-    const auto own_name = own_name_w ? PluginUtils::WStringToString(own_name_w) : std::string{};
-    if (ImGui::BeginTable("AuctionListings", 7, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable)) {
-        ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 55.0f);
-        ImGui::TableSetupColumn("Item");
-        ImGui::TableSetupColumn("Mods / Requirements");
-        ImGui::TableSetupColumn("Qty", ImGuiTableColumnFlags_WidthFixed, 40.0f);
-        ImGui::TableSetupColumn("Price", ImGuiTableColumnFlags_WidthFixed, 75.0f);
-        ImGui::TableSetupColumn("Player");
-        ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 75.0f);
-        ImGui::TableHeadersRow();
-        for (const auto& listing : auction_listings_) {
-            if (!CaseInsensitiveContains(listing.item_name, auction_search_buf_) && !CaseInsensitiveContains(listing.modifiers, auction_search_buf_)) continue;
-            ImGui::PushID(listing.listing_id.c_str());
-            auto price_label = std::format("{} Gold", listing.unit_price);
-            if (listing.currency_type == "platinum") price_label = std::format("{} Platinum", listing.unit_price);
-            else if (listing.currency_type == "armbrace") price_label = std::format("{} Armbraces", listing.unit_price);
-            else if (listing.currency_type == "ectoplasm") price_label = std::format("{} Ectoplasm", listing.unit_price);
-            else if (listing.currency_type == "other") price_label = std::format("{} {}", listing.unit_price, listing.currency_item.empty() ? "Other" : listing.currency_item);
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn(); ImGui::TextUnformatted(listing.listing_type == "sell" ? "SELL" : "BUY");
-            ImGui::TableNextColumn(); ImGui::TextWrapped("%s", listing.item_name.c_str());
-            ImGui::TableNextColumn(); ImGui::TextWrapped("%s", listing.modifiers.empty() ? listing.notes.c_str() : listing.modifiers.c_str());
-            ImGui::TableNextColumn(); ImGui::Text("%u", listing.quantity);
-            ImGui::TableNextColumn(); ImGui::TextWrapped("%s", price_label.c_str());
-            ImGui::TableNextColumn(); ImGui::TextWrapped("%s", listing.seller_name.c_str());
-            ImGui::TableNextColumn();
-            if (listing.seller_name == own_name) {
-                if (ImGui::SmallButton("Cancel")) CancelAuctionListing(listing.listing_id);
-            }
-            else if (ImGui::SmallButton("Contact")) {
-                const auto message = std::format("Hi, I'm contacting you about your {} listing for {} ({} @ {} each).",
-                                                 listing.listing_type, listing.item_name, listing.quantity, price_label);
-                GW::Chat::SendChat(ToWString(listing.seller_name).c_str(), ToWString(message).c_str());
+    ImGui::Spacing();
+    ImGui::SeparatorText("ACTIVE LISTINGS");
+    DrawListingFilters();
+    std::vector<AuctionListing> visible_listings = auction_listings_;
+    visible_listings.insert(visible_listings.end(), trade_chat_listings_.begin(), trade_chat_listings_.end());
+    DrawListingTable(visible_listings, false);
+}
+
+void DropExplorerPlugin::DrawMyListingsView()
+{
+    const auto sell_count = std::ranges::count_if(my_auction_listings_, [](const AuctionListing& listing) { return listing.listing_type == "sell"; });
+    const auto buy_count = std::ranges::count_if(my_auction_listings_, [](const AuctionListing& listing) { return listing.listing_type == "buy"; });
+    ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f), "My Listings");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Refresh##MyListings")) RefreshMyListings();
+    ImGui::SameLine();
+    ImGui::TextDisabled("Sell: %zu / 30 | Buy: %zu / 10", sell_count, buy_count);
+    ImGui::TextWrapped("These listings belong to this installation/account identity. You can cancel them from any character using this same installation; other installations cannot cancel them.");
+
+    if (!pending_auction_listings_.empty()) {
+        ImGui::SeparatorText("Pending locally");
+        const auto now = static_cast<uint64_t>(std::time(nullptr));
+        for (size_t i = 0; i < pending_auction_listings_.size(); ++i) {
+            const auto& pending = pending_auction_listings_[i];
+            const auto remaining = pending.send_at > now ? pending.send_at - now : 0;
+            ImGui::PushID(static_cast<int>(i));
+            ImGui::BulletText("%s: %s - %llum %02llus", pending.request.listing_type == "sell" ? "SELL" : "BUY",
+                pending.request.item_name.c_str(), remaining / 60, remaining % 60);
+            if (!(auction_request_kind_ == AuctionRequestKind::Create && pending_auction_inflight_index_ == i)) {
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Cancel pending")) {
+                    pending_auction_listings_.erase(pending_auction_listings_.begin() + static_cast<ptrdiff_t>(i));
+                    SavePendingAuctionListings();
+                    ImGui::PopID();
+                    break;
+                }
             }
             ImGui::PopID();
         }
-        ImGui::EndTable();
     }
+
+    ImGui::Separator();
+    DrawListingFilters();
+    if (auction_filter_type_idx_ != 1) {
+        std::vector<AuctionListing> sells;
+        std::ranges::copy_if(my_auction_listings_, std::back_inserter(sells), [](const AuctionListing& listing) { return listing.listing_type == "sell"; });
+        ImGui::SeparatorText("Sell listings");
+        ImGui::PushID("MySellListings");
+        DrawListingTable(sells, true);
+        ImGui::PopID();
+    }
+    if (auction_filter_type_idx_ != 2) {
+        std::vector<AuctionListing> buys;
+        std::ranges::copy_if(my_auction_listings_, std::back_inserter(buys), [](const AuctionListing& listing) { return listing.listing_type == "buy"; });
+        ImGui::SeparatorText("Buy orders");
+        ImGui::PushID("MyBuyListings");
+        DrawListingTable(buys, true);
+        ImGui::PopID();
+    }
+}
+
+void DropExplorerPlugin::DrawListingFilters()
+{
+    ImGui::SetNextItemWidth(220.0f);
+    ImGui::InputTextWithHint("##AuctionSearch", "Search item or modifiers", auction_search_buf_, IM_ARRAYSIZE(auction_search_buf_));
+    const char* types[] = {"Buy and sell", "Buy orders only", "Sell listings only"};
+    const char* ages[] = {"Newest to oldest", "Oldest to newest"};
+    const char* currencies[] = {"All currencies", "Gold", "Platinum", "Armbraces", "Ectoplasm", "Other"};
+    const char* values[] = {"Default value order", "Highest to lowest", "Lowest to highest"};
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(145.0f);
+    ImGui::Combo("##ListingTypeFilter", &auction_filter_type_idx_, types, IM_ARRAYSIZE(types));
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(145.0f);
+    ImGui::Combo("##ListingAgeFilter", &auction_filter_age_idx_, ages, IM_ARRAYSIZE(ages));
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(130.0f);
+    ImGui::Combo("##ListingCurrencyFilter", &auction_filter_currency_idx_, currencies, IM_ARRAYSIZE(currencies));
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(145.0f);
+    ImGui::Combo("##ListingValueFilter", &auction_filter_value_idx_, values, IM_ARRAYSIZE(values));
+}
+
+void DropExplorerPlugin::DrawListingTable(const std::vector<AuctionListing>& listings, const bool allow_cancel)
+{
+    static constexpr const char* currency_ids[] = {"", "gold", "platinum", "armbrace", "ectoplasm", "other"};
+    std::vector<const AuctionListing*> filtered;
+    filtered.reserve(listings.size());
+    for (const auto& listing : listings) {
+        if (auction_filter_type_idx_ == 1 && listing.listing_type != "buy") continue;
+        if (auction_filter_type_idx_ == 2 && listing.listing_type != "sell") continue;
+        if (auction_filter_currency_idx_ > 0 && listing.currency_type != currency_ids[auction_filter_currency_idx_]) continue;
+        if (!CaseInsensitiveContains(listing.item_name, auction_search_buf_) &&
+            !CaseInsensitiveContains(listing.modifiers, auction_search_buf_)) continue;
+        filtered.push_back(&listing);
+    }
+    std::ranges::sort(filtered, [&](const AuctionListing* lhs, const AuctionListing* rhs) {
+        const auto lhs_value = lhs->sort_price > 0.0 ? lhs->sort_price : lhs->unit_price;
+        const auto rhs_value = rhs->sort_price > 0.0 ? rhs->sort_price : rhs->unit_price;
+        if (auction_filter_value_idx_ == 1 && lhs_value != rhs_value) return lhs_value > rhs_value;
+        if (auction_filter_value_idx_ == 2 && lhs_value != rhs_value) return lhs_value < rhs_value;
+        return auction_filter_age_idx_ == 1 ? lhs->created_at < rhs->created_at : lhs->created_at > rhs->created_at;
+    });
+
+    const auto table_id = allow_cancel ? "MyAuctionListings" : "AuctionListings";
+    if (!ImGui::BeginTable(table_id, 8, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable)) return;
+    ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 55.0f);
+    ImGui::TableSetupColumn("Item");
+    ImGui::TableSetupColumn("Mods / Requirements");
+    ImGui::TableSetupColumn("Qty", ImGuiTableColumnFlags_WidthFixed, 40.0f);
+    ImGui::TableSetupColumn("Price", ImGuiTableColumnFlags_WidthFixed, 90.0f);
+    ImGui::TableSetupColumn("Listed", ImGuiTableColumnFlags_WidthFixed, 95.0f);
+    ImGui::TableSetupColumn("Player");
+    ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, show_messages_ ? 110.0f : 75.0f);
+    ImGui::TableHeadersRow();
+    for (const auto* listing : filtered) {
+        ImGui::PushID(listing->listing_id.c_str());
+        auto price_label = listing->price_display.empty() ? std::format("{} Gold", listing->unit_price) : listing->price_display;
+        if (listing->price_display.empty() && listing->currency_type == "platinum") price_label = std::format("{} Platinum", listing->unit_price);
+        else if (listing->price_display.empty() && listing->currency_type == "armbrace") price_label = std::format("{} Armbraces", listing->unit_price);
+        else if (listing->price_display.empty() && listing->currency_type == "ectoplasm") price_label = std::format("{} Ectoplasm", listing->unit_price);
+        else if (listing->price_display.empty() && listing->currency_type == "other") price_label = std::format("{} {}", listing->unit_price, listing->currency_item.empty() ? "Other" : listing->currency_item);
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn(); ImGui::TextUnformatted(listing->listing_type == "sell" ? "SELL" : "BUY");
+        ImGui::TableNextColumn(); ImGui::TextWrapped("%s", listing->item_name.c_str());
+        ImGui::TableNextColumn(); ImGui::TextWrapped("%s", listing->modifiers.c_str());
+        ImGui::TableNextColumn(); ImGui::Text("%u", listing->quantity);
+        ImGui::TableNextColumn(); ImGui::TextWrapped("%s", price_label.c_str());
+        ImGui::TableNextColumn(); ImGui::TextUnformatted(FormatTimestamp(listing->created_at).c_str());
+        ImGui::TableNextColumn(); ImGui::TextWrapped("%s", listing->seller_name.c_str());
+        ImGui::TableNextColumn();
+        if (allow_cancel) {
+            if (ImGui::SmallButton("Cancel")) CancelAuctionListing(listing->listing_id);
+        }
+        else {
+            if (ImGui::SmallButton("Contact")) {
+                const auto message = std::format("Hi, I'm contacting you about your {} listing for {} ({} @ {} each).",
+                    listing->listing_type, listing->item_name, listing->quantity, price_label);
+                GW::Chat::SendChat(ToWString(listing->seller_name).c_str(), ToWString(message).c_str());
+            }
+            if (show_messages_ && !listing->is_trade_chat) {
+                ImGui::SameLine();
+                if (ImGui::SmallButton("DM")) {
+                    PluginUtils::StrCopy(message_to_buf_, listing->seller_name.c_str(), IM_ARRAYSIZE(message_to_buf_));
+                    const auto dm_text = std::format("Regarding your {} listing: {} ({}x @ {})",
+                        listing->listing_type, listing->item_name, listing->quantity, price_label);
+                    PluginUtils::StrCopy(message_content_buf_, dm_text.c_str(), IM_ARRAYSIZE(message_content_buf_));
+                    message_tab_focus_requested_ = true;
+                }
+            }
+        }
+        ImGui::PopID();
+    }
+    ImGui::EndTable();
+}
+
+namespace {
+    std::string FormatTimestamp(const uint64_t ts)
+    {
+        if (!ts) return "Unknown";
+        const auto t = static_cast<std::time_t>(ts);
+        std::tm tm_buf{};
+        if (localtime_s(&tm_buf, &t) == 0) {
+            char buf[32];
+            std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tm_buf);
+            return buf;
+        }
+        return std::to_string(ts);
+    }
+}
+
+void DropExplorerPlugin::LoadLocalMessages()
+{
+    if (settings_folder_.empty()) return;
+    const auto file_path = std::filesystem::path(settings_folder_) / "messages.json";
+    if (!std::filesystem::exists(file_path)) return;
+    std::ifstream file(file_path);
+    if (!file.is_open()) return;
+    const std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    if (content.empty()) return;
+
+    LocalMessagesStore store;
+    if (!glz::read_json(store, content)) {
+        local_messages_ = std::move(store.messages);
+        my_characters_ = std::move(store.my_characters);
+        return;
+    }
+
+    std::vector<DirectMessage> legacy;
+    if (!glz::read_json(legacy, content)) {
+        local_messages_ = std::move(legacy);
+    }
+}
+
+void DropExplorerPlugin::SaveLocalMessages()
+{
+    if (settings_folder_.empty()) return;
+    const auto file_path = std::filesystem::path(settings_folder_) / "messages.json";
+    LocalMessagesStore store;
+    store.messages = local_messages_;
+    store.my_characters = my_characters_;
+    const auto payload = glz::write_json(store).value_or(std::string{});
+    if (payload.empty()) return;
+    std::ofstream file(file_path, std::ios::trunc);
+    if (file.is_open()) {
+        file << payload;
+    }
+}
+
+void DropExplorerPlugin::AddMyCharacter(const std::string& name)
+{
+    if (name.empty()) return;
+    const auto it = std::ranges::find_if(my_characters_, [&](const std::string& existing) {
+        return ToLower(existing) == ToLower(name);
+    });
+    if (it == my_characters_.end()) {
+        my_characters_.push_back(name);
+        SaveLocalMessages();
+    }
+}
+
+void DropExplorerPlugin::DeleteLocalMessage(const size_t index)
+{
+    if (index >= local_messages_.size()) return;
+    local_messages_.erase(local_messages_.begin() + index);
+    SaveLocalMessages();
+    if (selected_message_idx_ >= static_cast<int>(local_messages_.size())) {
+        selected_message_idx_ = static_cast<int>(local_messages_.size()) - 1;
+    }
+}
+
+void DropExplorerPlugin::CheckIncomingMessages()
+{
+    if (messages_client_ && messages_client_->IsPending()) return;
+    const auto base = GetServiceBaseUrl();
+    if (base.empty()) return;
+
+    const auto* player_name = GW::PlayerMgr::GetPlayerName();
+    if (player_name && *player_name) {
+        const auto char_name = PluginUtils::WStringToString(player_name);
+        if (!char_name.empty()) {
+            AddMyCharacter(char_name);
+        }
+    }
+
+    if (!player_name || !*player_name) return;
+    const auto recipients_param = PluginUtils::UrlEncode(PluginUtils::WStringToString(player_name));
+    const auto url = std::format("{}/v1/messages?recipients={}", base, recipients_param);
+
+    messages_client_ = std::make_unique<AsyncRestClient>();
+    messages_client_->SetUrl(url.c_str());
+    messages_client_->SetMethod(HttpMethod::Get);
+    messages_client_->SetUserAgent("GWToolbox-AuctionHouseDropFinder/1.0");
+    messages_client_->SetConnectTimeoutSec(5);
+    messages_client_->SetTimeoutSec(10);
+    messages_client_->ExecuteAsync();
+    message_request_kind_ = MessageRequestKind::Fetch;
+}
+
+void DropExplorerPlugin::SendDirectMessage()
+{
+    if (!show_messages_) return;
+    if (messages_client_ && messages_client_->IsPending()) return;
+    const auto base = GetServiceBaseUrl();
+    const auto* player_name = GW::PlayerMgr::GetPlayerName();
+    if (base.empty() || !player_name || !*player_name || !message_to_buf_[0] || !message_content_buf_[0]) {
+        message_status_ = "Server connection, recipient name, and message content are required";
+        return;
+    }
+
+    DirectMessageSendRequest req;
+    req.sender = PluginUtils::WStringToString(player_name);
+    req.recipient = StripXmlTags(message_to_buf_);
+    req.content = message_content_buf_;
+
+    const auto payload = glz::write_json(req).value_or(std::string{});
+    if (payload.empty()) {
+        message_status_ = "Could not encode message";
+        return;
+    }
+
+    messages_client_ = std::make_unique<AsyncRestClient>();
+    messages_client_->SetUrl((base + "/v1/messages").c_str());
+    messages_client_->SetMethod(HttpMethod::Post);
+    messages_client_->SetHeader("Content-Type", "application/json");
+    messages_client_->SetUserAgent("GWToolbox-AuctionHouseDropFinder/1.0");
+    messages_client_->SetPostContent(payload, ContentFlag::Copy);
+    messages_client_->SetConnectTimeoutSec(5);
+    messages_client_->SetTimeoutSec(10);
+    messages_client_->ExecuteAsync();
+    message_request_kind_ = MessageRequestKind::Send;
+    message_status_ = "Sending direct message...";
+}
+
+void DropExplorerPlugin::UpdateMessageRequests(const float delta)
+{
+    message_check_timer_ += delta;
+    if (message_request_kind_ == MessageRequestKind::None) {
+        if (message_check_timer_ >= 30.0f) {
+            message_check_timer_ = 0.0f;
+            CheckIncomingMessages();
+        }
+        return;
+    }
+
+    if (!messages_client_ || !messages_client_->IsCompleted()) return;
+    const auto completed_kind = message_request_kind_;
+    message_request_kind_ = MessageRequestKind::None;
+    const auto successful = messages_client_->IsSuccessful();
+
+    if (completed_kind == MessageRequestKind::Fetch) {
+        if (successful && show_messages_) {
+            DirectMessagesFetchResponse response;
+            if (!glz::read_json(response, messages_client_->GetContent())) {
+                if (!response.messages.empty()) {
+                    for (auto& msg : response.messages) {
+                        msg.is_read = false;
+                        local_messages_.insert(local_messages_.begin(), std::move(msg));
+                    }
+                    SaveLocalMessages();
+                    message_status_ = std::format("Received {} new direct message(s)", response.messages.size());
+                }
+            }
+        }
+    }
+    else if (completed_kind == MessageRequestKind::Send) {
+        if (successful) {
+            message_status_ = "Message sent successfully!";
+            message_content_buf_[0] = '\0';
+        }
+        else {
+            message_status_ = std::format("Failed to send message (HTTP {})", messages_client_->GetStatusCode());
+        }
+    }
+}
+
+void DropExplorerPlugin::DrawMessagesView()
+{
+    const auto* player_name_w = GW::PlayerMgr::GetPlayerName();
+    const auto current_player_name = (player_name_w && *player_name_w) ? PluginUtils::WStringToString(player_name_w) : std::string{};
+
+    if (current_player_name.empty()) {
+        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "Direct Messages requires logging into a character.");
+    } else {
+        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1.0f), "Logged in as: %s", current_player_name.c_str());
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Check for Messages")) {
+        CheckIncomingMessages();
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("Status: %s", message_status_.c_str());
+    ImGui::TextWrapped("Offline messages are held by the server until the addressed character logs in, then deleted from the server after delivery. The server keeps no delivered chat history.");
+    ImGui::TextWrapped("Deals are at your own risk. Keep your own transaction records if needed. The service operator is not liable for deals that go sideways; buyer/seller disputes should be directed to ArenaNet.");
+
+    ImGui::Separator();
+
+    const auto avail = ImGui::GetContentRegionAvail();
+    const float list_width = std::max(270.0f, avail.x * 0.35f);
+
+    ImGui::BeginChild("MessagesInboxPane", ImVec2(list_width, 0.0f), true);
+    ImGui::Text("Inbox (%zu)", local_messages_.size());
+    ImGui::Separator();
+
+    if (local_messages_.empty()) {
+        ImGui::TextDisabled("No messages saved.");
+    } else {
+        for (size_t i = 0; i < local_messages_.size(); ++i) {
+            auto& msg = local_messages_[i];
+            ImGui::PushID(static_cast<int>(i));
+
+            const bool is_selected = (selected_message_idx_ == static_cast<int>(i));
+            std::string label = msg.is_read ? msg.sender : ("[NEW] " + msg.sender);
+            if (label.empty()) label = "Unknown";
+
+            if (ImGui::Selectable(label.c_str(), is_selected)) {
+                selected_message_idx_ = static_cast<int>(i);
+                if (!msg.is_read) {
+                    msg.is_read = true;
+                    SaveLocalMessages();
+                }
+            }
+            ImGui::SameLine(ImGui::GetWindowWidth() - 75.0f);
+            const auto ts_str = FormatTimestamp(msg.timestamp);
+            ImGui::TextDisabled("%s", ts_str.size() >= 10 ? ts_str.substr(5, 5).c_str() : "");
+
+            ImGui::PopID();
+        }
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    if (!local_messages_.empty()) {
+        if (ImGui::SmallButton("Mark All Read")) {
+            for (auto& msg : local_messages_) msg.is_read = true;
+            SaveLocalMessages();
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Delete All")) {
+            local_messages_.clear();
+            selected_message_idx_ = -1;
+            SaveLocalMessages();
+        }
+    }
+
+    ImGui::Spacing();
+    if (ImGui::CollapsingHeader("My Characters (Alts)")) {
+        ImGui::TextDisabled("Characters are registered automatically when you log in and cannot be manually added or removed.");
+        for (const auto& character : my_characters_) ImGui::BulletText("%s", character.c_str());
+    }
+
+    ImGui::EndChild();
+
+    ImGui::SameLine();
+
+    ImGui::BeginChild("MessageDetailPane", ImVec2(0.0f, 0.0f), true);
+
+    ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f), "Message Details");
+    if (selected_message_idx_ >= 0 && selected_message_idx_ < static_cast<int>(local_messages_.size())) {
+        const auto& selected = local_messages_[selected_message_idx_];
+        ImGui::Text("From: %s", selected.sender.c_str());
+        ImGui::SameLine(ImGui::GetContentRegionAvail().x - 140.0f);
+        ImGui::TextDisabled("Date: %s", FormatTimestamp(selected.timestamp).c_str());
+
+        const bool is_to_current = !current_player_name.empty() && ToLower(selected.recipient) == ToLower(current_player_name);
+        if (is_to_current) {
+            ImGui::TextDisabled("To: %s", selected.recipient.c_str());
+        } else {
+            ImGui::TextColored(ImVec4(0.85f, 0.85f, 0.5f, 1.0f), "To: %s (Alt Character)", selected.recipient.c_str());
+        }
+
+        ImGui::Separator();
+        ImGui::BeginChild("MessageBodyText", ImVec2(0.0f, 110.0f), true);
+        ImGui::TextWrapped("%s", selected.content.c_str());
+        ImGui::EndChild();
+
+        if (ImGui::SmallButton("Reply")) {
+            PluginUtils::StrCopy(message_to_buf_, selected.sender.c_str(), IM_ARRAYSIZE(message_to_buf_));
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Delete Message")) {
+            DeleteLocalMessage(selected_message_idx_);
+        }
+    } else {
+        ImGui::TextDisabled("Select a message from the list on the left to read it.");
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    ImGui::TextColored(ImVec4(0.4f, 0.85f, 1.0f, 1.0f), "Send Direct Message (Offline Delivery)");
+    ImGui::TextDisabled("Messages are queued until the addressed character logs in, then removed from the server after delivery.");
+
+    ImGui::SetNextItemWidth(220.0f);
+    ImGui::InputTextWithHint("##MsgTo", "Recipient Character Name", message_to_buf_, IM_ARRAYSIZE(message_to_buf_));
+    ImGui::SameLine();
+    if (ImGui::Button("Use Target")) {
+        const auto* target = GW::Agents::GetTarget();
+        const auto* living = target ? target->GetAsAgentLiving() : nullptr;
+        if (living && living->IsPlayer()) {
+            if (const auto* wname = GW::Agents::GetPlayerNameByLoginNumber(living->login_number)) {
+                const auto sname = PluginUtils::WStringToString(wname);
+                if (!sname.empty()) {
+                    PluginUtils::StrCopy(message_to_buf_, sname.c_str(), IM_ARRAYSIZE(message_to_buf_));
+                }
+            }
+        }
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Fills recipient with currently targeted player's name");
+    }
+
+    ImGui::InputTextMultiline("##MsgContent", message_content_buf_, IM_ARRAYSIZE(message_content_buf_), ImVec2(-1.0f, 90.0f));
+
+    if (ImGui::Button("Send Direct Message")) {
+        SendDirectMessage();
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Clear")) {
+        message_to_buf_[0] = '\0';
+        message_content_buf_[0] = '\0';
+    }
+
+    ImGui::EndChild();
 }

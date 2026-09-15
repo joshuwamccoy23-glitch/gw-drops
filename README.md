@@ -1,10 +1,10 @@
 # GW Drop Explorer and Auction House
 
-Crowdsourced drop observations, vendor pricing, map guidance, and player-to-player listings for Guild Wars via the **DropExplorer** GWToolbox++ plugin.
+Crowdsourced drop observations, vendor pricing, map guidance, and player-to-player listings for Guild Wars via the **AuctionHouse & DropFinder** GWToolbox++ plugin.
 
 ## Architecture
 
-1. **Player Client (`DropExplorer.dll`)**:
+1. **Player Client (`AuctionHouseDropFinder.dll`)**:
    - **Completely Self-Contained**: Does not require `TelemetryHarness.dll` or any third-party plugins.
    - **30-Second Telemetry Batching**: In-game mob kills, detected drops, vendor price quotes, and completed buy/sell transactions are sent in one batch every 30 seconds when observations are queued.
    - **Periodic GitHub Sync**: Downloads sanitized crowdsourced datasets (`community-rates.json` and `vendor-prices.json`) directly from this repository's raw GitHub URLs to show live drop rates (with sample size and 95% Wilson confidence intervals) and vendor price averages in tooltips.
@@ -35,15 +35,15 @@ The instructions below describe the older manually configured client:
 
 1. Double-click `start-server.bat` (or run `npm start`).
 2. The server will start listening on port `8787` (`http://localhost:8787`).
-3. In GWToolbox++ under **Settings -> Drop Explorer**:
+3. In GWToolbox++ under **Settings -> AuctionHouse&DropFinder**:
    - Set **Collector server** to `http://localhost:8787` (or your stable Cloudflare hostname). A URL ending in `/v1/mobdroptelemetry` is also accepted.
    - Check **Contribute anonymous drop & vendor observations**.
    - Set **Batch Interval** (default 5.0 minutes).
 
 ## Repository Layout
 
-- `plugin/`: Source code for `DropExplorer` (`DropExplorerPlugin.h`, `DropExplorerPlugin.cpp`, `DropExplorerData.h`, `DropExplorerData.cpp`).
-- `release/DropExplorer.dll`: Pre-compiled DropExplorer plugin DLL.
+- `plugin/`: Source code for `AuctionHouse & DropFinder` (`DropExplorerPlugin.h`, `DropExplorerPlugin.cpp`, `DropExplorerData.h`, `DropExplorerData.cpp`).
+- `release/AuctionHouseDropFinder.dll`: Pre-compiled AuctionHouse & DropFinder plugin DLL.
 - `release/GWToolboxdll.dll`: Matching GWToolbox++ core with the native inventory context-menu callback exports.
 - `integration/`: Source patch and integration notes for the required GWToolbox++ core hook.
 - `server/server.js`: Native Node.js + SQLite collector server.

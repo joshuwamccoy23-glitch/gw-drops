@@ -1,4 +1,4 @@
-name: Publish DropExplorer release
+name: Publish AuctionHouse DropFinder release
 
 on:
   push:
@@ -17,6 +17,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" release/DropExplorer.dll release/GWToolboxdll.dll \
-            --title "DropExplorer $GITHUB_REF_NAME" \
+          gh release create "$GITHUB_REF_NAME" release/AuctionHouseDropFinder.dll release/GWToolboxdll.dll \
+            --title "AuctionHouse & DropFinder $GITHUB_REF_NAME" \
             --notes "Adds Auction House actions directly to the GWToolbox++ inventory right-click menu and canonical inscription, rune, and insignia dropdowns. Install both DLLs and fully restart Guild Wars. Also includes multi-currency listings, repaired navigation and live mob tracking, self-contained telemetry, and collector hardening."

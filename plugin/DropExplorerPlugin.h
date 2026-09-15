@@ -10,6 +10,9 @@
 #include <unordered_set>
 #include <filesystem>
 #include <memory>
+#include <atomic>
+#include <mutex>
+#include <thread>
 #include <d3d9.h>
 #include <RestClient.h>
 #include <GWCA/Utilities/Hook.h>
@@ -32,10 +35,39 @@ public:
         RarityDesc
     };
 
+    enum class LinkerRarity : uint8_t {
+        White,
+        Blue,
+        Purple,
+        Gold,
+        Green,
+        Unknown
+    };
+
+    struct LinkerDecodeState {
+        uint32_t item_id = 0;
+        uint32_t model_id = 0;
+        uint32_t quantity = 1;
+        uint32_t value = 0;
+        GW::Constants::ItemType type = GW::Constants::ItemType::Unknown;
+        LinkerRarity rarity = LinkerRarity::White;
+
+        std::string name;
+        std::string stats;
+        bool name_done = false;
+        bool stats_done = false;
+        bool cancelled = false;
+
+        bool should_send_when_ready = false;
+        int pending_link_channel = 2;
+        std::string pending_link_note;
+        std::string pending_link_whisper;
+    };
+
     DropExplorerPlugin() = default;
     ~DropExplorerPlugin() override = default;
 
-    [[nodiscard]] const char* Name() const override { return "Drop Explorer"; }
+    [[nodiscard]] const char* Name() const override { return "AuctionHouse&DropFinder"; }
     [[nodiscard]] const char* Icon() const override { return "\xef\x80\x82"; }
     [[nodiscard]] bool HasSettings() const override { return true; }
 
@@ -46,6 +78,7 @@ public:
     void DrawSettings() override;
     void Draw(IDirect3DDevice9* device) override;
     void Update(float delta) override;
+    bool WndProc(UINT message, WPARAM w_param, LPARAM l_param) override;
 
     void SelectZoneByMapId(uint32_t map_id);
     void SelectZoneByName(const std::string& zone_name);
@@ -175,6 +208,18 @@ private:
         std::string modifiers;
         uint64_t created_at = 0;
         uint64_t expires_at = 0;
+        uint64_t publish_at = 0;
+        bool is_pending = false;
+        uint32_t seconds_until_public = 0;
+        bool is_trade_chat = false;
+        std::string price_display;
+        double sort_price = 0.0;
+    };
+
+    struct TradeChatMessage {
+        std::string sender;
+        std::string message;
+        uint64_t timestamp = 0;
     };
 
     struct AuctionListingsDocument {
@@ -198,21 +243,75 @@ private:
         uint32_t duration_hours = 24;
     };
 
+    struct PendingAuctionListing {
+        AuctionListingRequest request;
+        uint64_t send_at = 0;
+    };
+
+    struct PendingAuctionStore {
+        std::vector<PendingAuctionListing> listings;
+    };
+
     enum class AuctionRequestKind : uint8_t {
         None,
         Refresh,
+        RefreshMine,
         Create,
         Cancel
     };
 
+    struct DirectMessage {
+        std::string id;
+        std::string sender;
+        std::string recipient;
+        std::string content;
+        uint64_t timestamp = 0;
+        bool is_read = false;
+    };
+
+    struct DirectMessagesFetchResponse {
+        std::vector<DirectMessage> messages;
+    };
+
+    struct DirectMessageSendRequest {
+        std::string sender;
+        std::string recipient;
+        std::string content;
+    };
+
+    struct LocalMessagesStore {
+        std::vector<DirectMessage> messages;
+        std::vector<std::string> my_characters;
+    };
+
+    enum class MessageRequestKind : uint8_t {
+        None,
+        Fetch,
+        Send
+    };
+
+
     void BuildItemIndex();
     void SortItemIndex();
     void LoadExternalDatabase(const std::filesystem::path& path);
+    void DrawAuctionHouseView();
+    void DrawMyListingsView();
+    void DrawListingFilters();
+    void DrawListingTable(const std::vector<AuctionListing>& listings, bool allow_cancel);
+    void DrawItemLinkerView();
     void DrawZoneExplorerView();
     void DrawItemSearchView();
-    void DrawAuctionHouseView();
+    void DrawMessagesView();
+    void CheckIncomingMessages();
+    void SendDirectMessage();
+    void UpdateMessageRequests(float delta);
+    void LoadLocalMessages();
+    void SaveLocalMessages();
+    void DeleteLocalMessage(size_t index);
+    void AddMyCharacter(const std::string& name);
     void TrackMob(const DropExplorer::ZoneInfo& zone, const DropExplorer::MobInfo& mob, bool travel);
     bool RefreshTrackedMobMarker();
+    void CenterWorldMapOnZone(uint32_t map_id);
     std::string GetResolvedAgentName(uint32_t agent_id, const GW::Agent* agent);
     void UpdateDropTelemetry(float delta);
     void ResetDropTelemetry();
@@ -223,11 +322,25 @@ private:
     void UpdateVendorPricesDownload();
     void ApplyVendorPrices(const VendorPricesDocument& document);
     void RefreshAuctionListings();
+    void RefreshMyListings();
+    void StartTradeChatFeed();
+    void UpdateTradeChatListings();
+    void IngestTradeChatMessage(const TradeChatMessage& message);
     void CreateAuctionListing();
+    void SendPendingAuctionListing();
+    void LoadPendingAuctionListings();
+    void SavePendingAuctionListings();
     void CancelAuctionListing(const std::string& listing_id);
     void UpdateAuctionRequest(float delta);
     std::string GetServiceBaseUrl() const;
     void PrefillAuctionItem(const GW::Item* item);
+    void PrefillAuctionFromLinker(const LinkerDecodeState& state);
+    void SetLinkerFocusedItem(const GW::Item* item);
+    void LinkItem(const GW::Item* item, int channel_index, const std::string& note = "");
+    void LinkItemById(uint32_t item_id, int channel_index);
+    void DispatchChatLine(char channel, const std::string& message, const std::string& whisper_target);
+    std::vector<std::string> BuildLinkerChatLines(const std::string& name, const std::string& stats, uint32_t quantity, const std::string& note);
+    void TriggerLinkerPendingSendIfReady(const std::shared_ptr<LinkerDecodeState>& state);
     static bool __cdecl DrawInventoryContextMenuEntry(uint32_t item_id, float width);
     void TriggerBatchUpload();
     void DrawItemTooltip(const std::string& name,
@@ -272,6 +385,8 @@ private:
     uint32_t navigation_target_map_id_ = 0;
     float navigation_refresh_timer_ = 0.0f;
     std::string navigation_status_;
+    std::string highlighted_mob_name_;
+    bool zone_explorer_focus_requested_ = false;
 
     std::unordered_map<uint32_t, ObservedMob> observed_mobs_;
     std::unordered_map<uint32_t, ObservedItem> observed_items_;
@@ -283,15 +398,24 @@ private:
     size_t telemetry_inflight_count_ = 0;
     float telemetry_scan_timer_ = 0.0f;
     uint64_t telemetry_next_retry_ms_ = 0;
-    bool telemetry_enabled_ = false;
+    bool telemetry_enabled_ = true;
     bool download_community_rates_ = true;
+    bool show_auction_house_ = true;
+    bool show_my_listings_ = true;
+    bool show_messages_ = true;
+    bool show_zone_explorer_ = true;
+    bool show_item_search_ = true;
+    bool crowdsourced_data_disabled_ = false;
     bool rates_request_started_ = false;
     bool vendor_prices_request_started_ = false;
     std::string telemetry_install_id_;
-    char telemetry_endpoint_[256] = "";
+    std::string service_base_url_;
+    std::unique_ptr<AsyncRestClient> discovery_client_;
+    uint64_t discovery_next_ms_ = 0;
+    void UpdateServiceDiscovery();
     char github_base_url_[256] = "https://raw.githubusercontent.com/joshuwamccoy23-glitch/gw-drops/main";
 
-    float batch_interval_minutes_ = 5.0f;
+    float batch_interval_minutes_ = 0.5f;
     float batch_timer_ms_ = 0.0f;
 
     std::vector<TelemetryVendorEvent> vendor_upload_queue_;
@@ -305,38 +429,57 @@ private:
 
     GW::HookEntry price_quote_entry_;
     GW::HookEntry trans_done_entry_;
+    GW::HookEntry item_click_entry_;
     void OnPriceQuote(const GW::Packet::StoC::QuotedItemPrice* packet);
     void OnTransactionDone(const GW::Packet::StoC::TransactionDone* packet);
 
     std::string last_upload_status_ = "None";
     std::string last_sync_status_ = "None";
     std::vector<AuctionListing> auction_listings_;
+    std::vector<AuctionListing> my_auction_listings_;
+    std::vector<AuctionListing> trade_chat_listings_;
+    std::vector<TradeChatMessage> trade_chat_inbox_;
+    std::mutex trade_chat_mutex_;
+    std::jthread trade_chat_thread_;
+    std::atomic_bool trade_chat_enabled_ = false;
+    std::atomic_bool trade_chat_connected_ = false;
+    std::vector<PendingAuctionListing> pending_auction_listings_;
+    size_t pending_auction_inflight_index_ = static_cast<size_t>(-1);
     AuctionRequestKind auction_request_kind_ = AuctionRequestKind::None;
     float auction_refresh_timer_ = 60.0f;
     std::string auction_status_ = "Not synced";
     char auction_search_buf_[128] = "";
+    int auction_filter_type_idx_ = 0;
+    int auction_filter_age_idx_ = 0;
+    int auction_filter_currency_idx_ = 0;
+    int auction_filter_value_idx_ = 0;
     char auction_item_buf_[160] = "";
-    char auction_notes_buf_[241] = "";
     char auction_modifiers_buf_[1001] = "";
-    char auction_weapon_prefix_buf_[161] = "";
-    char auction_weapon_suffix_buf_[161] = "";
     char auction_other_currency_buf_[161] = "";
     int auction_type_idx_ = 0;
-    int auction_equipment_type_idx_ = 0;
     int auction_currency_idx_ = 0;
-    int auction_inscription_idx_ = 0;
-    int auction_rune_idx_ = 0;
-    int auction_insignia_idx_ = 0;
     int auction_quantity_ = 1;
     int auction_unit_price_ = 0;
     int auction_duration_hours_ = 24;
     bool auction_publish_name_confirmed_ = false;
+    bool auction_new_listing_open_ = false;
     bool auction_focus_requested_ = false;
     bool auction_show_matches_ = false;
     bool auction_item_from_inventory_ = false;
     uint32_t auction_item_model_id_ = 0;
     std::unique_ptr<PluginUtils::EncString> auction_item_name_decoder_;
     std::unique_ptr<PluginUtils::EncString> auction_item_details_decoder_;
+
+    // Item Linker tab state
+    std::shared_ptr<LinkerDecodeState> linker_decode_state_;
+    char linker_custom_note_buf_[128] = "";
+    char linker_whisper_target_buf_[64] = "";
+    int linker_selected_channel_idx_ = 2;
+    bool linker_focus_requested_ = false;
+    bool linker_waiting_for_item_ = false;
+    bool auction_waiting_for_item_ = false;
+    uint32_t pending_right_click_item_id_ = 0;
+    uint64_t dismiss_inventory_context_menu_until_ = 0;
 
     // UI state
     int current_tab_ = 0;
@@ -347,6 +490,18 @@ private:
     char zone_search_buf_[128] = "";
     char item_search_buf_[128] = "";
     int item_category_filter_idx_ = 0;
+
+    // Direct Messages tab state
+    std::vector<DirectMessage> local_messages_;
+    std::vector<std::string> my_characters_;
+    std::unique_ptr<AsyncRestClient> messages_client_;
+    MessageRequestKind message_request_kind_ = MessageRequestKind::None;
+    float message_check_timer_ = 0.0f;
+    std::string message_status_ = "Ready";
+    char message_to_buf_[64] = "";
+    char message_content_buf_[512] = "";
+    int selected_message_idx_ = -1;
+    bool message_tab_focus_requested_ = false;
 
     std::wstring settings_folder_;
 };
