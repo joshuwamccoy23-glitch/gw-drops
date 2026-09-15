@@ -24,6 +24,14 @@ Crowdsourced drop observations, vendor pricing, map guidance, and player-to-play
 
 ## Quick Start (Running the Server)
 
+Use `start-network.bat` to run the local server with a Cloudflare Quick Tunnel and automatic recovery. The launcher restarts the tunnel if it exits, checks the local server every 15 seconds, and publishes the verified public address to `data/auction-droplistings.txt` in this repository. The host needs working Git push credentials. Publication uses a separate temporary checkout so unrelated local changes are not committed.
+
+On this host, the `GW-Drops Auction Server` scheduled task starts the network launcher at Windows logon and restarts it if the launcher exits.
+
+The updated DLL periodically reads that address through GitHub's uncached contents endpoint and fetches live listings directly from the server. It never reads listings from GitHub or local files. A failed auction request forces an immediate address lookup, so tunnel address changes require no DLL rebuild. During an outage, automatic reads retry; failed publishing/cancellation is reported and is not automatically replayed.
+
+The instructions below describe the older manually configured client:
+
 1. Double-click `start-server.bat` (or run `npm start`).
 2. The server will start listening on port `8787` (`http://localhost:8787`).
 3. In GWToolbox++ under **Settings -> Drop Explorer**:
