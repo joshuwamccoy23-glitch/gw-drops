@@ -58,3 +58,4 @@ CREATE TABLE IF NOT EXISTS auction_listings (
 );
 
 CREATE INDEX IF NOT EXISTS auction_listings_active ON auction_listings(status, expires_at, item_name);
+CREATE INDEX IF NOT EXISTS auction_listings_account_type ON auction_listings(seller_install_id, listing_type, status, expires_at);

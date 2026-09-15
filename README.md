@@ -6,9 +6,9 @@ Crowdsourced drop observations, vendor pricing, map guidance, and player-to-play
 
 1. **Player Client (`DropExplorer.dll`)**:
    - **Completely Self-Contained**: Does not require `TelemetryHarness.dll` or any third-party plugins.
-   - **Smart 5–10 Minute Batching**: In-game observations (mob kills, confirmed drops, vendor price quotes, and completed buy/sell transactions) are held in memory. Every 5–10 minutes (user-configurable), if data was collected, a single batch POST is dispatched to your server. If nothing was collected, **zero** network requests are made.
+   - **30-Second Telemetry Batching**: In-game mob kills, detected drops, vendor price quotes, and completed buy/sell transactions are sent in one batch every 30 seconds when observations are queued.
    - **Periodic GitHub Sync**: Downloads sanitized crowdsourced datasets (`community-rates.json` and `vendor-prices.json`) directly from this repository's raw GitHub URLs to show live drop rates (with sample size and 95% Wilson confidence intervals) and vendor price averages in tooltips.
-   - **Auction House**: Publishes sell listings and buy orders to the collector. Trades are never executed by the plugin; the Contact button starts an in-game whisper to the listing player.
+   - **Auction House**: Holds new sell listings and buy orders locally for five minutes before sending them to the collector. The server enforces a maximum of 30 active sell listings and 10 active buy orders per installation account. Trades are never executed by the plugin; the Contact button starts an in-game whisper to the listing player.
    - **Inventory Listing Flow**: Right-click an inventory item in the existing GWToolbox++ item menu to create a sell listing or buy order. The plugin prefills its name, model, quantity, and decoded weapon or armor modifier text, then opens the Auction House tab.
    - **Canonical Equipment Modifiers**: Inscriptions, insignias, and armor runes use fixed dropdowns with a `None` choice. Readable modifiers on inventory items are selected automatically.
    - **Item Search**: Search the built-in DropExplorer catalog or enter any Guild Wars item name manually. Buy orders can include required inscriptions, runes, insignias, and other modifiers.
@@ -21,6 +21,7 @@ Crowdsourced drop observations, vendor pricing, map guidance, and player-to-play
    - Aggregates mob drop rates with Wilson 95% confidence intervals and vendor prices (min, max, average, sample counts).
    - Periodically exports and pushes updated `data/community-rates.json` and `data/vendor-prices.json` to GitHub.
    - Does not expose private installation IDs through public listing or recent-observation endpoints. Character names are published only after explicit confirmation.
+   - Holds offline messages until the addressed character logs in, delivers them once, and deletes the server copy immediately after delivery.
 
 ## Quick Start (Running the Server)
 

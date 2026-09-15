@@ -337,10 +337,13 @@ async function createListing(req, res) {
     return jsonResponse(res, { error: "Invalid listing" }, 400);
   }
   const now = Math.floor(Date.now() / 1000);
-  const recent = db.prepare(
-    "SELECT COUNT(*) AS count FROM auction_listings WHERE seller_install_id = ? AND created_at >= ?"
-  ).get(body.install_id, now - 3600)?.count || 0;
-  if (recent >= 20) return jsonResponse(res, { error: "Listing limit exceeded" }, 429);
+  const listingLimit = body.listing_type === "sell" ? 30 : 10;
+  const activeCount = db.prepare(
+    "SELECT COUNT(*) AS count FROM auction_listings WHERE seller_install_id = ? AND listing_type = ? AND status = 'active' AND expires_at > ?"
+  ).get(body.install_id, body.listing_type, now)?.count || 0;
+  if (activeCount >= listingLimit) {
+    return jsonResponse(res, { error: `Active ${body.listing_type} listing limit exceeded (max ${listingLimit} per account)` }, 429);
+  }
   const listingId = randomUUID();
   db.prepare(`
     INSERT INTO auction_listings
