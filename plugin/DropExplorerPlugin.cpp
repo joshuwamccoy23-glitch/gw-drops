@@ -74,6 +74,14 @@ namespace {
         return res;
     }
 
+    std::string TrimText(std::string_view text, std::string_view characters = " \t\r\n")
+    {
+        const auto first = text.find_first_not_of(characters);
+        if (first == std::string_view::npos) return {};
+        const auto last = text.find_last_not_of(characters);
+        return std::string(text.substr(first, last - first + 1));
+    }
+
     std::wstring ToWString(std::string_view s)
     {
         if (s.empty()) return L"";
@@ -1827,7 +1835,7 @@ void DropExplorerPlugin::IngestTradeChatMessage(const TradeChatMessage& message)
         std::stringstream fragments(section);
         std::string fragment;
         while (std::getline(fragments, fragment)) {
-            fragment = TextUtils::trim(fragment, " \t\r\n-=:~^");
+            fragment = TrimText(fragment, " \t\r\n-=:~^");
             std::smatch price_match;
             if (!std::regex_search(fragment, price_match, price_regex)) continue;
 
@@ -1845,13 +1853,13 @@ void DropExplorerPlugin::IngestTradeChatMessage(const TradeChatMessage& message)
                 stats.push_back(it->str());
             }
             for (auto it = std::sregex_iterator(descriptor.begin(), descriptor.end(), parenthetical_regex); it != std::sregex_iterator(); ++it) {
-                stats.push_back(TextUtils::trim(it->str(), " ()"));
+                stats.push_back(TrimText(it->str(), " ()"));
             }
             auto item_name = std::regex_replace(descriptor, stat_regex, " ");
             item_name = std::regex_replace(item_name, parenthetical_regex, " ");
             item_name = std::regex_replace(item_name, noise_regex, " ");
             item_name = std::regex_replace(item_name, whitespace_regex, " ");
-            item_name = TextUtils::trim(item_name, " \t\r\n-=:~^()[]{}");
+            item_name = TrimText(item_name, " \t\r\n-=:~^()[]{}");
             if (item_name.size() < 2) continue;
 
             auto value_text = price_match[1].str();
